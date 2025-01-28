@@ -1,4 +1,5 @@
 import tkinter as tk
+from tkinter import messagebox
 import sqlite3
 
 connection = sqlite3.connect("barberdb.db")
@@ -101,6 +102,13 @@ def register():
    def create():
        new_email = e1.get()
        new_password = e2.get()
+       if not new_email or not new_password:
+           messagebox.showerror("Username and Password must be entered.")
+           return
+       connection = sqlite3.connect("barberdb.db")
+       cursor = connection.cursor()
+       try:
+           cursor.execute()
        email.append(new_email)
        password.append(new_password)
        register_widget.destroy()
