@@ -112,19 +112,19 @@ class UIManager:
 
         window = tk.Tk()
         window.title("Database Contents")
-        window.geometry("720x520")
+        window.geometry("1920x1080")
 
         tk.Label(window, text="Customers", font=("Helvetica", 12)).grid(row=0, column=0, pady=10)
         tk.Label(window, text="Haircuts", font=("Helvetica", 12)).grid(row=0, column=1, pady=10)
         tk.Label(window, text="Bookings", font=("Helvetica", 12)).grid(row=0, column=2, pady=10)
 
-        customer_list = tk.Listbox(window, width=30, height=10)
+        customer_list = tk.Listbox(window, width=100, height=30)
         customer_list.grid(row=1, column=0, padx=10, pady=10)
 
-        haircut_box = tk.Listbox(window, width=30, height=10)
+        haircut_box = tk.Listbox(window, width=100, height=30)
         haircut_box.grid(row=1, column=1, padx=10, pady=10)
 
-        booking_box = tk.Listbox(window, width=30, height=10)
+        booking_box = tk.Listbox(window, width=100, height=30)
         booking_box.grid(row=1, column=2, padx=10, pady=10)
 
         for customer in data["customers"]:
