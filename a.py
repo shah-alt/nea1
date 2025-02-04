@@ -57,8 +57,9 @@ class DatabaseManager:
             FOREIGN KEY (CustomerID) REFERENCES Customer(CustomerID) ON DELETE CASCADE,
             FOREIGN KEY (HaircutID) REFERENCES Haircut(HaircutID) ON DELETE CASCADE)''')
 
-    def insert_customer(self, email, password):
-        self.cursor.execute('''INSERT INTO Customer (Email, Password) VALUES (?, ?)''', (email, password))
+    def insert_customer(self, surname, firstname, email, password, dateofbirth):
+        self.cursor.execute('''INSERT INTO Customer (Surname, FirstName, Email, 
+        Password, DateOfBirth) VALUES (?, ?, ?, ?, ?)''', (surname, firstname, email, password, dateofbirth))
         self.connection.commit()
 
     def fetch_all_customers(self):
@@ -146,8 +147,8 @@ class UIManager:
 
     def register(self):
         def create():
-            new_email = e1.get()
-            new_password = e2.get()
+            new_email = email_entry.get()
+            new_password = password_entry.get()
             if not new_email or not new_password:
                 messagebox.showerror("Error", "Email and Password must be entered.")
                 return
@@ -162,15 +163,25 @@ class UIManager:
         register_widget.geometry("720x520")
 
         tk.Label(register_widget, text="Email").grid(row=0, column=0, padx=20, pady=(20, 10))
-        tk.Label(register_widget, text="Password").grid(row=1, column=0, padx=20, pady=(0, 10))
+        tk.Label(register_widget, text="Password").grid(row=1, column=0, padx=20, pady=(20, 10))
+        tk.Label(register_widget, text="Surname").grid(row=2, column=0, padx=20, pady=(20, 10))
+        tk.Label(register_widget, text="First Name").grid(row=3, column=0, padx=20, pady=(20, 10))
+        tk.Label(register_widget, text="Date Of Birth").grid(row=4, column=0, padx=20, pady=(20, 10))
 
-        e1 = tk.Entry(register_widget)
-        e1.grid(row=0, column=1, padx=20, pady=(20, 10))
-        e2 = tk.Entry(register_widget)
-        e2.grid(row=1, column=1, padx=20, pady=(0, 10))
+
+        email_entry= tk.Entry(register_widget)
+        email_entry.grid(row=0, column=1, padx=20, pady=(20, 10))
+        password_entry = tk.Entry(register_widget)
+        password_entry.grid(row=1, column=1, padx=20, pady=(0, 10))
+        surname_entry= tk.Entry(register_widget)
+        surname_entry.grid(row=2, column=1, padx=20, pady=(20, 10))
+        firstname_entry= tk.Entry(register_widget)
+        firstname_entry.grid(row=3, column=1, padx=20, pady=(20, 10))
+        dateofbirth_entry= tk.Entry(register_widget)
+        dateofbirth_entry.grid(row=4, column=1, padx=20, pady=(20, 10))
 
         register_button = tk.Button(register_widget, text="Create", command=create)
-        register_button.grid(row=2, column=1, pady=(20, 20))
+        register_button.grid(row=5, column=1, pady=(20, 20))
 
         back_button = tk.Button(register_widget, text="Return",
                                 command=lambda: [register_widget.destroy(), self.app.main_menu()])
@@ -237,3 +248,6 @@ class BarberApp:
 if __name__ == "__main__":
     app = BarberApp()
     app.main_menu()
+
+
+
