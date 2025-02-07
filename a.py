@@ -27,6 +27,12 @@ class AuthManager:
         return ''.join([chr(i) for i in range(length)])
 
 
+   # def login_check(self, email, password):
+
+
+
+
+
 class DatabaseManager:
     def __init__(self):
         self.connection = sqlite3.connect("barberdb.db")
@@ -57,9 +63,10 @@ class DatabaseManager:
             FOREIGN KEY (CustomerID) REFERENCES Customer(CustomerID) ON DELETE CASCADE,
             FOREIGN KEY (HaircutID) REFERENCES Haircut(HaircutID) ON DELETE CASCADE)''')
 
-    def insert_customer(self, surname, firstname, email, password, dateofbirth):
+    def insert_customer(self, surname, firstname, email, hashed_password, salt, dateofbirth):
         self.cursor.execute('''INSERT INTO Customer (Surname, FirstName, Email, 
-        Password, DateOfBirth) VALUES (?, ?, ?, ?, ?)''', (surname, firstname, email, password, dateofbirth))
+        Hashed_Password, DateOfBirth) VALUES (?, ?, ?, ?, ?,?)''', (surname, firstname, email,
+                                                                    hashed_password, salt, dateofbirth))
         self.connection.commit()
 
     def fetch_all_customers(self):
@@ -79,6 +86,9 @@ class DatabaseManager:
         haircuts = self.fetch_all_haircuts()
         bookings = self.fetch_all_bookings()
         return {"customers": customers, "haircuts": haircuts, "bookings": bookings}
+
+    def remove_customer(self,CustomerID):
+        self.cursor.execute('''DELETE FROM Customer WHERE CustomerID = ?'''),(CustomerID,)
 
 
 class UIManager:
@@ -118,6 +128,7 @@ class UIManager:
         tk.Label(window, text="Customers", font=("Helvetica", 12)).grid(row=0, column=0, pady=10)
         tk.Label(window, text="Haircuts", font=("Helvetica", 12)).grid(row=0, column=1, pady=10)
         tk.Label(window, text="Bookings", font=("Helvetica", 12)).grid(row=0, column=2, pady=10)
+        tk.Label(window, text="Delete Customer", font=("Helvetica", 12)).grid(row=1, column=0, pady=10)
 
         customer_list = tk.Listbox(window, width=100, height=30)
         customer_list.grid(row=1, column=0, padx=10, pady=10)
@@ -128,9 +139,12 @@ class UIManager:
         booking_box = tk.Listbox(window, width=100, height=30)
         booking_box.grid(row=1, column=2, padx=10, pady=10)
 
+
+
         for customer in data["customers"]:
             customer_list.insert(tk.END,
-                                 f"ID: {customer[0]}, Name: {customer[1]} {customer[2]}, Email: {customer[3]}")
+                                 f"ID: {customer[0]}, Name: {customer[1]} {customer[2]}, Email: {customer[3]}"
+                                 f", Hashed_Password: {customer[4]}, Salt: {customer[5]}, Date Of Birth: {customer[6]}")
 
         for haircut in data["haircuts"]:
             haircut_box.insert(tk.END,
@@ -248,6 +262,5 @@ class BarberApp:
 if __name__ == "__main__":
     app = BarberApp()
     app.main_menu()
-
 
 
