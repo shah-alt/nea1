@@ -1,12 +1,13 @@
 import tkinter as tk
 from tkinter import messagebox
 import sqlite3
-
+import random
 
 class AuthManager:
-    def __init__(self):
+    def __init__(self, db):
         self.email = []
         self.password = []
+        self.db = db
 
     def valid_email(self, email):
         return email in self.email
@@ -24,13 +25,15 @@ class AuthManager:
         return hex(hash_value)[2:].zfill(8)
 
     def generate_salt(self, length=8):
-        return ''.join([chr(i) for i in range(length)])
+        characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'
+        return ''.join(random.choice(characters) for _ in range(length))
 
-
-   # def login_check(self, email, password):
-
-
-
+    def login_check(self, email, password):
+        customer = self.db.fetch_customer_email(email)
+        if customer:
+            hashed_password = self.hash_password(password, salt=customer[5])
+            return hashed_password == customer[4]
+        return False
 
 
 class DatabaseManager:
@@ -45,7 +48,8 @@ class DatabaseManager:
             Surname TEXT,
             FirstName TEXT,
             Email TEXT,
-            Password TEXT,
+            Hashed_Password TEXT,
+            Salt TEXT,
             Date_Of_Birth TEXT)''')
 
         self.cursor.execute('''CREATE TABLE IF NOT EXISTS Haircut (
@@ -63,11 +67,20 @@ class DatabaseManager:
             FOREIGN KEY (CustomerID) REFERENCES Customer(CustomerID) ON DELETE CASCADE,
             FOREIGN KEY (HaircutID) REFERENCES Haircut(HaircutID) ON DELETE CASCADE)''')
 
-    def insert_customer(self, surname, firstname, email, hashed_password, salt, dateofbirth):
+    def check_table(self):
+        self.cursor.execute("PRAGMA table_info(Customer);")
+        columns = self.cursor.fetchall()
+        print(columns)
+
+    def insert_customer(self, surname, firstname, email, hashed_password, salt, date_of_birth):
         self.cursor.execute('''INSERT INTO Customer (Surname, FirstName, Email, 
-        Hashed_Password, DateOfBirth) VALUES (?, ?, ?, ?, ?,?)''', (surname, firstname, email,
-                                                                    hashed_password, salt, dateofbirth))
+        Hashed_Password, Salt, Date_Of_Birth) VALUES (?, ?, ?, ?, ?, ?)''', (surname, firstname, email,
+                                                                             hashed_password, salt, date_of_birth))
         self.connection.commit()
+
+    def fetch_customer_email(self, email):
+        self.cursor.execute("SELECT * FROM Customer WHERE Email=?", (email,))
+        return self.cursor.fetchone()
 
     def fetch_all_customers(self):
         self.cursor.execute("SELECT * FROM Customer")
@@ -87,13 +100,15 @@ class DatabaseManager:
         bookings = self.fetch_all_bookings()
         return {"customers": customers, "haircuts": haircuts, "bookings": bookings}
 
-    def remove_customer(self,CustomerID):
-        self.cursor.execute('''DELETE FROM Customer WHERE CustomerID = ?'''),(CustomerID,)
+    def remove_customer(self, CustomerID):
+        self.cursor.execute('''DELETE FROM Customer WHERE CustomerID = ?''', (CustomerID,))
+        self.connection.commit()
 
 
 class UIManager:
     def __init__(self, app):
         self.app = app
+        self.auth = app.auth
 
     def main_menu(self):
         window = tk.Tk()
@@ -139,8 +154,6 @@ class UIManager:
         booking_box = tk.Listbox(window, width=100, height=30)
         booking_box.grid(row=1, column=2, padx=10, pady=10)
 
-
-
         for customer in data["customers"]:
             customer_list.insert(tk.END,
                                  f"ID: {customer[0]}, Name: {customer[1]} {customer[2]}, Email: {customer[3]}"
@@ -166,9 +179,14 @@ class UIManager:
             if not new_email or not new_password:
                 messagebox.showerror("Error", "Email and Password must be entered.")
                 return
-            self.app.db.insert_customer(new_email, new_password)
+
+            salt = self.app.auth.generate_salt()
+            hashed_password = self.auth.hash_password(new_password, salt=salt)
+            self.app.db.insert_customer(surname_entry.get(), firstname_entry.get(), new_email,
+                                        hashed_password, salt, dateofbirth_entry.get())
+
             self.app.auth.email.append(new_email)
-            self.app.auth.password.append(new_password)
+            self.app.auth.password.append(hashed_password)
             register_widget.destroy()
             self.app.main_menu()
 
@@ -182,16 +200,15 @@ class UIManager:
         tk.Label(register_widget, text="First Name").grid(row=3, column=0, padx=20, pady=(20, 10))
         tk.Label(register_widget, text="Date Of Birth").grid(row=4, column=0, padx=20, pady=(20, 10))
 
-
-        email_entry= tk.Entry(register_widget)
+        email_entry = tk.Entry(register_widget)
         email_entry.grid(row=0, column=1, padx=20, pady=(20, 10))
         password_entry = tk.Entry(register_widget)
         password_entry.grid(row=1, column=1, padx=20, pady=(0, 10))
-        surname_entry= tk.Entry(register_widget)
+        surname_entry = tk.Entry(register_widget)
         surname_entry.grid(row=2, column=1, padx=20, pady=(20, 10))
-        firstname_entry= tk.Entry(register_widget)
+        firstname_entry = tk.Entry(register_widget)
         firstname_entry.grid(row=3, column=1, padx=20, pady=(20, 10))
-        dateofbirth_entry= tk.Entry(register_widget)
+        dateofbirth_entry = tk.Entry(register_widget)
         dateofbirth_entry.grid(row=4, column=1, padx=20, pady=(20, 10))
 
         register_button = tk.Button(register_widget, text="Create", command=create)
@@ -204,6 +221,16 @@ class UIManager:
         register_widget.mainloop()
 
     def login(self):
+        def attempt_login():
+            email = e1.get()
+            password = e2.get()
+            if self.auth.login_check(email, password):
+                messagebox.showinfo("Success", "Login successful!")
+                login_widget.destroy()
+                self.app.main_page()
+            else:
+                messagebox.showerror("Error", "Invalid email or password.")
+
         login_widget = tk.Tk()
         login_widget.title("Login")
         login_widget.geometry("720x520")
@@ -216,7 +243,7 @@ class UIManager:
         e2 = tk.Entry(login_widget, show="*")
         e2.grid(row=1, column=1, padx=20, pady=(0, 10))
 
-        login_button = tk.Button(login_widget, text="Login", command=lambda: [login_widget.destroy(), self.app.main_page()])
+        login_button = tk.Button(login_widget, text="Login", command=attempt_login)
         login_button.grid(row=2, column=1, pady=(20, 20))
 
         login_widget.mainloop()
@@ -225,7 +252,7 @@ class UIManager:
 class BarberApp:
     def __init__(self):
         self.db = DatabaseManager()
-        self.auth = AuthManager()
+        self.auth = AuthManager(self.db)
         self.ui = UIManager(self)
 
     def main_menu(self):
@@ -261,6 +288,5 @@ class BarberApp:
 
 if __name__ == "__main__":
     app = BarberApp()
-    app.main_menu()
-
-
+    app.main_menu()  # Start the app
+    app.db.check_table()  # Verify the columns in the Customer table
