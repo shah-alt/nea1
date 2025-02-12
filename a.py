@@ -173,17 +173,34 @@ class UIManager:
         window.mainloop()
 
     def register(self):
+        def validate_date(date_str):
+            try:
+                if len(date_str) != 10:
+                    return False
+                day, month, year = map(int, date_str.split('/'))
+                if not (1 <= day <= 31 and 1 <= month <= 12 and 1900 <= year <= 2025):
+                    return False
+                return True
+            except:
+                return False
+
         def create():
             new_email = email_entry.get()
             new_password = password_entry.get()
+            date_of_birth = dateofbirth_entry.get()
+
             if not new_email or not new_password:
                 messagebox.showerror("Error", "Email and Password must be entered.")
+                return
+
+            if not validate_date(date_of_birth):
+                messagebox.showerror("Error", "Date must be in format DD/MM/YYYY")
                 return
 
             salt = self.app.auth.generate_salt()
             hashed_password = self.auth.hash_password(new_password, salt=salt)
             self.app.db.insert_customer(surname_entry.get(), firstname_entry.get(), new_email,
-                                        hashed_password, salt, dateofbirth_entry.get())
+                                        hashed_password, salt, date_of_birth)
 
             self.app.auth.email.append(new_email)
             self.app.auth.password.append(hashed_password)
@@ -209,6 +226,7 @@ class UIManager:
         firstname_entry = tk.Entry(register_widget)
         firstname_entry.grid(row=3, column=1, padx=20, pady=(20, 10))
         dateofbirth_entry = tk.Entry(register_widget)
+        dateofbirth_entry.insert(0, "DD/MM/YYYY")
         dateofbirth_entry.grid(row=4, column=1, padx=20, pady=(20, 10))
 
         register_button = tk.Button(register_widget, text="Create", command=create)
@@ -289,4 +307,3 @@ class BarberApp:
 if __name__ == "__main__":
     app = BarberApp()
     app.main_menu()  # Start the app
-    app.db.check_table()  # Verify the columns in the Customer table
