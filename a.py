@@ -2,6 +2,8 @@ import tkinter as tk
 from tkinter import messagebox
 import sqlite3
 import random
+
+
 class AuthManager:
     def __init__(self, db):
         self.email = []
@@ -105,7 +107,8 @@ class DatabaseManager:
 
 
 class UIManager:
-    def __init__(self, app):
+    def __init__(self, app, db):
+        self.db = db
         self.app = app
         self.auth = app.auth
 
@@ -115,13 +118,14 @@ class UIManager:
         window.geometry("1280x1080")
 
         tk.Label(window, text="Login to continue", font=("Helvetica", 16)).place(x=500, y=200)
-        
+
         tk.Button(window, text="Login", command=lambda: [window.destroy(), self.app.login()]).place(x=500, y=300)
-        
+
         tk.Button(window, text="Register", command=lambda: [window.destroy(), self.app.register()]).place(x=500, y=400)
-                                                                                                         
-        tk.Button(window, text="Staff Login", command=lambda: [window.destroy(), self.app.staff_login()]).place(x=500, y=500)
-                                                                                                                                                                                                                              
+
+        tk.Button(window, text="Staff Login", command=lambda: [window.destroy(), self.app.staff_login()]).place(x=500,
+                                                                                                                y=500)
+
         tk.Button(window, text="View Database", command=self.show_database).place(x=500, y=600)
 
         window.mainloop()
@@ -133,18 +137,18 @@ class UIManager:
         window.title("Database Contents")
         window.geometry("1920x1080")
 
-        tk.Label(window, text="Customers", font=("Helvetica", 12)).place(x=600, y=100)
-        tk.Label(window, text="Haircuts", font=("Helvetica", 12)).place(x=1200, y=100)
-        tk.Label(window, text="Bookings", font=("Helvetica", 12)).place(x=1800, y=100)
+        tk.Label(window, text="Customers", font=("Helvetica", 12)).place(x=300, y=0)
+        tk.Label(window, text="Haircuts", font=("Helvetica", 12)).place(x=900, y=0)
+        tk.Label(window, text="Bookings", font=("Helvetica", 12)).place(x=1500, y=0)
 
         customer_list = tk.Listbox(window, width=90, height=30)
-        customer_list.place(x=0, y=0)
+        customer_list.place(x=50, y=50)
 
         haircut_box = tk.Listbox(window, width=90, height=30)
-        haircut_box.place(x=600, y=0)
+        haircut_box.place(x=650, y=50)
 
         booking_box = tk.Listbox(window, width=90, height=30)
-        booking_box.place(x=1200, y=0)
+        booking_box.place(x=1250, y=50)
 
         for customer in data["customers"]:
             customer_list.insert(tk.END,
@@ -162,7 +166,7 @@ class UIManager:
         close_button = tk.Button(window, text="Close", command=window.destroy)
         close_button.place(x=800, y=600)
 
-        remove_customer = tk.Button(window, text="Remove Customer",command=self.db.remove_customer())
+        remove_customer = tk.Button(window, text="Remove Customer", command=self.db.remove_customer())
         remove_customer.place(x=250, y=600)
 
         window.mainloop()
@@ -268,13 +272,16 @@ class UIManager:
         back_button.place(x=30, y=300)
 
         login_widget.mainloop()
+        
+    def pricing(self):
+        
 
 
 class BarberApp:
     def __init__(self):
         self.db = DatabaseManager()
         self.auth = AuthManager(self.db)
-        self.ui = UIManager(self)
+        self.ui = UIManager(self, self.db)
 
     def main_menu(self):
         self.ui.main_menu()
@@ -292,16 +299,16 @@ class BarberApp:
 
         tk.Button(main_window, text="Logout", width=10,
                   command=lambda: [main_window.destroy(), self.main_menu()]).place(x=50, y=450)
-        tk.Label(main_window, text="Barber Bookings", font=("Helvetica", 18, "bold")).place(x=1, y=0)
+        tk.Label(main_window, text="Barber Bookings", font=("Helvetica", 18, "bold")).place(x=600, y=50)
 
-        tk.Label(main_window, text="Bookings", font=("Helvetica", 12)).place(x=50, y=120)
-        tk.Button(main_window, text="Continue").place(x=50, y=175)
+        tk.Label(main_window, text="Bookings", font=("Helvetica", 12)).place(x=300, y=120)
+        tk.Button(main_window, text="Continue").place(x=300, y=175)
 
-        tk.Label(main_window, text="Predictive Analytics", font=("Helvetica", 12)).place(x=200, y=120)
-        tk.Button(main_window, text="Continue").place(x=200, y=175)
+        tk.Label(main_window, text="Predictive Analytics", font=("Helvetica", 12)).place(x=600, y=120)
+        tk.Button(main_window, text="Continue").place(x=600, y=175)
 
-        tk.Label(main_window, text="Pricing", font=("Helvetica", 12)).place(x=400, y=120)
-        tk.Button(main_window, text="Continue").place(x=400, y=175)
+        tk.Label(main_window, text="Pricing", font=("Helvetica", 12)).place(x=900, y=120)
+        tk.Button(main_window, text="Continue", command=main_window.destroy()).place(x=900, y=175)
 
         main_window.mainloop()
 
