@@ -36,7 +36,6 @@ class AuthManager:
             return hashed_password == customer[4]
         return False
 
-
 class DatabaseManager:
     def __init__(self):
         self.connection = sqlite3.connect("barberdb.db")
@@ -55,7 +54,7 @@ class DatabaseManager:
 
         self.cursor.execute('''CREATE TABLE IF NOT EXISTS Haircut (
             HaircutID INTEGER PRIMARY KEY AUTOINCREMENT,
-            "Haircut Name" TEXT,
+            Haircut Name TEXT,
             Price REAL,
             Estimated_Time TEXT)''')
 
@@ -67,6 +66,11 @@ class DatabaseManager:
             HaircutID INTEGER,
             FOREIGN KEY (CustomerID) REFERENCES Customer(CustomerID) ON DELETE CASCADE,
             FOREIGN KEY (HaircutID) REFERENCES Haircut(HaircutID) ON DELETE CASCADE)''')
+
+        self.cursor.execute('''CREATE TABLE IF NOT EXISTS Staff (
+            StaffID INTEGER PRIMARY KEY AUTOINCREMENT, 
+            Email TEXT,
+            Staff_Number TEXT)''')
 
     def check_table(self):
         self.cursor.execute("PRAGMA table_info(Customer);")
@@ -105,12 +109,15 @@ class DatabaseManager:
         self.cursor.execute('''DELETE FROM Customer WHERE CustomerID = ?''', (CustomerID,))
         self.connection.commit()
 
-
 class UIManager:
     def __init__(self, app, db):
         self.db = db
         self.app = app
         self.auth = app.auth
+
+    def back_button(self, widget):
+        back_button = tk.Button(widget, text="Return",
+                                command=lambda: [widget.destroy(), self.app.main_menu()])
 
     def main_menu(self):
         window = tk.Tk()
@@ -272,10 +279,36 @@ class UIManager:
         back_button.place(x=30, y=300)
 
         login_widget.mainloop()
-        
-    def pricing(self):
-        
 
+    def pricing(self):
+        pricing_widget = tk.Tk()
+        pricing_widget.title("Login")
+        pricing_widget.geometry("800x800")
+
+        pricing_widget.mainloop()
+
+    def predictive_analytics(self):
+        analytics_widget = tk.Tk()
+        analytics_widget.title("Login")
+        analytics_widget.geometry("800x800")
+
+        analytics_widget.mainloop()
+
+    def bookings(self):
+        bookings_widget = tk.Tk()
+        bookings_widget.title("Login")
+        bookings_widget.geometry("800x800")
+
+        bookings_widget.mainloop()
+
+    def staff_login(self):
+        staff_login_widget = tk.Tk()
+        staff_login_widget.title("Login")
+        staff_login_widget.geometry("800x800")
+
+
+
+        staff_login_widget.mainloop()
 
 class BarberApp:
     def __init__(self):
