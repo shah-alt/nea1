@@ -1,7 +1,8 @@
 import tkinter as tk
-from tkinter import messagebox
+from tkinter import messagebox, ttk
 import sqlite3
 import random
+from datetime import datetime, timedelta
 
 
 class AuthManager:
@@ -105,6 +106,17 @@ class DatabaseManager:
         bookings = self.fetch_all_bookings()
         return {"customers": customers, "haircuts": haircuts, "bookings": bookings}
 
+    def get_available_slots(self,date):
+        booked_slots = []
+        unbooked_slots = []
+        booked_slots = self.cursor.execute("SELECT Time FROM Booking WHERE Date = ?", (date,)).fetchall()
+        for time in booked_slots:
+            booked_slots.append(time[0])
+        times = [f"{hour:02d}:00" for hour in range(9,18)]
+        for time in times:
+            if time not in booked_slots:
+                unbooked_slots.append(time)
+
     def remove_customer(self, CustomerID):
         self.cursor.execute('''DELETE FROM Customer WHERE CustomerID = ?''', (CustomerID,))
         self.connection.commit()
@@ -173,7 +185,7 @@ class UIManager:
         close_button = tk.Button(window, text="Close", command=window.destroy)
         close_button.place(x=800, y=600)
 
-        remove_customer = tk.Button(window, text="Remove Customer", command=self.db.remove_customer())
+        remove_customer = tk.Button(window, text="Remove Customer", command=lambda: self.db.remove_customer(customer_id))
         remove_customer.place(x=250, y=600)
 
         window.mainloop()
@@ -295,11 +307,49 @@ class UIManager:
         analytics_widget.mainloop()
 
     def bookings(self):
+        def on_date_select():
+            selected_date = f"{year_spinbox.get()}-{int(month_spinbox.get()):02d}-{int(day_spinbox.get()):02d}"
+            available_slots = self.db.get_available_slots(selected_date)
+            time_listbox.delete(0, tk.END)
+            for time in available_slots:
+                time_listbox.insert(tk.END, time)
+
         bookings_widget = tk.Tk()
-        bookings_widget.title("Login")
+        bookings_widget.title("Bookings")
         bookings_widget.geometry("800x800")
 
+        ttk.Label(bookings_widget, text="Select a Date:").pack(pady=10)
+
+        frame = ttk.Frame(bookings_widget)
+        frame.pack(pady=10)
+
+        ttk.Label(frame, text="Year:").grid(row=0, column=0)
+        year_spinbox = ttk.Spinbox(frame, from_=2000, to=2100, width=5, wrap=True)
+        year_spinbox.set(datetime.now().year)
+        year_spinbox.grid(row=0, column=1)
+
+        ttk.Label(frame, text="Month:").grid(row=0, column=2)
+        month_spinbox = ttk.Spinbox(frame, from_=1, to=12, width=3, wrap=True)
+        month_spinbox.set(datetime.now().month)
+        month_spinbox.grid(row=0, column=3)
+
+        ttk.Label(frame, text="Day:").grid(row=0, column=4)
+        day_spinbox = ttk.Spinbox(frame, from_=1, to=31, width=3, wrap=True)
+        day_spinbox.set(datetime.now().day)
+        day_spinbox.grid(row=0, column=5)
+
+        ttk.Button(bookings_widget, text="Check Availability", command=on_date_select).pack(pady=10)
+
+        ttk.Label(bookings_widget, text="Available Times:").pack(pady=10)
+        time_listbox = tk.Listbox(bookings_widget)
+        time_listbox.pack(pady=10)
+
         bookings_widget.mainloop()
+
+
+        bookings_widget = tk.Tk()
+        bookings_widget.title("Bookings")
+        bookings_widget.geometry("800x800")
 
     def staff_login(self):
         staff_login_widget = tk.Tk()
@@ -335,13 +385,13 @@ class BarberApp:
         tk.Label(main_window, text="Barber Bookings", font=("Helvetica", 18, "bold")).place(x=600, y=50)
 
         tk.Label(main_window, text="Bookings", font=("Helvetica", 12)).place(x=300, y=120)
-        tk.Button(main_window, text="Continue").place(x=300, y=175)
+        tk.Button(main_window, text="Continue", command=lambda: [main_window.destroy(), self.ui.bookings()]).place(x=300, y=175)
 
         tk.Label(main_window, text="Predictive Analytics", font=("Helvetica", 12)).place(x=600, y=120)
         tk.Button(main_window, text="Continue").place(x=600, y=175)
 
         tk.Label(main_window, text="Pricing", font=("Helvetica", 12)).place(x=900, y=120)
-        tk.Button(main_window, text="Continue", command=main_window.destroy()).place(x=900, y=175)
+        tk.Button(main_window, text="Continue", command=lambda: [main_window.destroy()]).place(x=900, y=175)
 
         main_window.mainloop()
 
