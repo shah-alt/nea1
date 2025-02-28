@@ -1,0 +1,169 @@
+import random
+import string
+from datetime import datetime, timedelta
+import sqlite3
+
+# Helper functions to generate fake data
+def generate_random_string(length=10):
+    return ''.join(random.choices(string.ascii_letters + string.digits, k=length))
+
+def generate_random_email():
+    return f"{generate_random_string(5)}@gmail.com"
+
+def generate_random_date_of_birth():
+    start_date = datetime(1970, 1, 1)
+    end_date = datetime(2000, 1, 1)
+    delta = end_date - start_date
+    random_days = random.randint(0, delta.days)
+    birth_date = start_date + timedelta(days=random_days)
+    return birth_date.strftime('%Y-%m-%d')
+
+def generate_random_time():
+    return f"{random.randint(0, 23):02}:{random.randint(0, 59):02}"
+
+def generate_random_haircut_name():
+    haircuts = ["Buzz Cut", "Pompadour", "Crew Cut", "Fade", "Undercut", "Caesar Cut", "Quiff", "Taper"]
+    return random.choice(haircuts)
+
+def generate_random_price():
+    return round(random.uniform(15.0, 50.0), 2)
+
+def generate_random_estimated_time():
+    return f"{random.randint(20, 60)} min"
+
+# Function to create and initialize the database tables
+def create_tables(cursor):
+    cursor.execute('''DROP TABLE IF EXISTS Booking''')
+    cursor.execute('''DROP TABLE IF EXISTS Customer''')
+    cursor.execute('''DROP TABLE IF EXISTS Haircut''')
+    cursor.execute('''DROP TABLE IF EXISTS Staff''')
+
+    cursor.execute('''CREATE TABLE IF NOT EXISTS Customer (
+        CustomerID INTEGER PRIMARY KEY AUTOINCREMENT,
+        Surname TEXT,
+        FirstName TEXT,
+        Email TEXT,
+        Hashed_Password TEXT,
+        Salt TEXT,
+        Date_Of_Birth TEXT)''')
+
+    cursor.execute('''CREATE TABLE IF NOT EXISTS Haircut (
+        HaircutID INTEGER PRIMARY KEY AUTOINCREMENT,
+        Haircut_Name TEXT,
+        Price REAL,
+        Estimated_Time TEXT)''')
+
+    cursor.execute('''CREATE TABLE IF NOT EXISTS Booking (
+        BookingID INTEGER PRIMARY KEY AUTOINCREMENT,
+        Date TEXT,
+        Time TEXT,
+        CustomerID INTEGER,
+        HaircutID INTEGER,
+        FOREIGN KEY (CustomerID) REFERENCES Customer(CustomerID) ON DELETE CASCADE,
+        FOREIGN KEY (HaircutID) REFERENCES Haircut(HaircutID) ON DELETE CASCADE)''')
+
+    cursor.execute('''CREATE TABLE IF NOT EXISTS Staff (
+        StaffID INTEGER PRIMARY KEY AUTOINCREMENT,
+        Email TEXT,
+        Staff_Number TEXT)''')
+
+# Function to insert data into the database
+def insert_data(cursor):
+    # Insert fake data into customers, haircuts, staff, and bookings
+    customers = []
+    haircuts = []
+    staff = []
+    bookings = []
+
+    for _ in range(50):  # Generate 50 entries for each
+        # Generate and append a customer
+        customers.append((
+            generate_random_string(10),        # Surname
+            generate_random_string(10),        # FirstName
+            generate_random_email(),           # Email
+            generate_random_string(64),        # Hashed_Password
+            generate_random_string(16),        # Salt
+            generate_random_date_of_birth()    # Date_Of_Birth
+        ))
+
+        # Generate and append a haircut
+        haircuts.append((
+            generate_random_haircut_name(),    # Haircut Name
+            generate_random_price(),           # Price
+            generate_random_estimated_time()   # Estimated Time
+        ))
+
+        # Generate and append staff
+        staff.append((
+            generate_random_email(),   # Email
+            generate_random_string(8)  # Staff_Number
+        ))
+
+    # Insert customers
+    cursor.executemany('''INSERT INTO Customer (Surname, FirstName, Email, Hashed_Password, Salt, Date_Of_Birth)
+                          VALUES (?, ?, ?, ?, ?, ?)''', customers)
+
+    # Insert haircuts
+    cursor.executemany('''INSERT INTO Haircut (Haircut_Name, Price, Estimated_Time)
+                          VALUES (?, ?, ?)''', haircuts)
+
+    # Insert staff
+    cursor.executemany('''INSERT INTO Staff (Email, Staff_Number)
+                          VALUES (?, ?)''', staff)
+
+    # Generate and append a booking (using a random customer and haircut)
+    for _ in range(50):
+        bookings.append((
+            random.randint(1, 50),  # CustomerID (randomly selecting from the 50 generated customers)
+            random.randint(1, 50),  # HaircutID (randomly selecting from the generated haircuts)
+            generate_random_date_of_birth(),   # Date (random, simulate booking date)
+            generate_random_time()        # Time (random)
+        ))
+
+    # Insert bookings
+    cursor.executemany('''INSERT INTO Booking (CustomerID, HaircutID, Date, Time)
+                          VALUES (?, ?, ?, ?)''', bookings)
+
+# Main function to run everything
+def main():
+    # Connect to the SQLite database (it will be created if it doesn't exist)
+    conn = sqlite3.connect('barberdb.db')  # Replace 'your_database.db' with your actual database file name
+    cursor = conn.cursor()
+
+    # Create tables in the database
+    create_tables(cursor)
+
+    # Insert generated data into the database
+    insert_data(cursor)
+
+    # Commit the changes and close the connection
+    conn.commit()
+    conn.close()
+    print("Data has been successfully inserted into the database.")
+
+# Run the main function
+if __name__ == "__main__":
+    main()
+
+def fetch_all_data():
+    # Connect to your SQLite database
+    conn = sqlite3.connect('barberdb.db')  # Replace with your actual database file name
+    cursor = conn.cursor()
+
+    # Fetch and print all data from each table
+    tables = ['Customer', 'Haircut', 'Booking', 'Staff']
+    for table in tables:
+        print(f"\nFetching data from table: {table}")
+        cursor.execute(f"SELECT * FROM {table}")
+        rows = cursor.fetchall()  # Fetch all rows from the table
+        if rows:
+            for row in rows:
+                print(row)
+        else:
+            print(f"No data found in {table} table.")
+
+    # Close the connection
+    conn.close()
+
+# Call the function to fetch and print all data
+fetch_all_data()
