@@ -3,6 +3,7 @@ from tkinter import messagebox, ttk
 import sqlite3
 import random
 from datetime import datetime, timedelta
+import re
 
 
 class AuthManager:
@@ -116,9 +117,18 @@ class DatabaseManager:
         for time in times:
             if time not in booked_slots:
                 unbooked_slots.append(time)
+        return unbooked_slots
 
     def remove_customer(self, CustomerID):
         self.cursor.execute('''DELETE FROM Customer WHERE CustomerID = ?''', (CustomerID,))
+        self.connection.commit()
+
+    def remove_haircut(self, HaircutID):
+        self.cursor.execute('''DELETE FROM Haircut WHERE HaircutID = ?''', (HaircutID,))
+        self.connection.commit()
+
+    def remove_booking(self, BookingID):
+        self.cursor.execute('''DELETE FROM Booking WHERE BookingID = ?''', (BookingID,))
         self.connection.commit()
 
 class UIManager:
@@ -150,6 +160,52 @@ class UIManager:
         window.mainloop()
 
     def show_database(self):
+        def remove_selected_booking():
+            selected_booking = booking_box.curselection()
+            if not selected_booking:
+                messagebox.showerror("Please select a booking to remove")
+                return
+
+            selected_booking_info = booking_box.get(selected_booking[0])
+
+            BookingID = re.search(r"ID: (\d+)", selected_booking_info)
+            if BookingID:
+                BookingID = int(BookingID.group(1))
+                self.db.remove_booking(BookingID)
+                messagebox.showinfo("Success", f"Booking ID {BookingID} removed successfully.")
+            else:
+                messagebox.showerror("Error", "Booking ID could not be extracted.")
+
+        def remove_selected_haircut():
+                selected_haircut = haircut_box.curselection()
+                if not selected_haircut:
+                    messagebox.showerror("Please select a customer to remove")
+                    return
+
+                selected_haircut_info = haircut_box.get(selected_haircut[0])
+
+                HaircutID = re.search(r"ID: (\d+)", selected_haircut_info)
+                if HaircutID:
+                    HaircutID = int(HaircutID.group(1))
+                    self.db.remove_haircut(HaircutID)
+                    messagebox.showinfo("Success", f"Haircut ID {HaircutID} removed successfully.")
+                else:
+                    messagebox.showerror("Error", "Haircut ID could not be extracted.")
+        def remove_selected_customer():
+            selected_customer = customer_list.curselection()
+            if not selected_customer:
+                messagebox.showerror("Please select a customer to remove")
+                return
+
+            selected_customer_info = customer_list.get(selected_customer[0])
+
+            customerID = re.search(r"ID: (\d+)", selected_customer_info)
+            if customerID:
+                customerID = int(customerID.group(1))
+                self.db.remove_customer(customerID)
+                messagebox.showinfo("Success", f"Customer ID {customerID} removed successfully.")
+            else:
+                messagebox.showerror("Error", "Customer ID could not be extracted.")
         data = self.app.db.fetch_all_data()
 
         window = tk.Tk()
@@ -185,8 +241,14 @@ class UIManager:
         close_button = tk.Button(window, text="Close", command=window.destroy)
         close_button.place(x=800, y=600)
 
-        remove_customer = tk.Button(window, text="Remove Customer", command=lambda: self.db.remove_customer(customer_id))
+        remove_customer = tk.Button(window, text="Remove Customer", command=remove_selected_customer)
         remove_customer.place(x=250, y=600)
+
+        remove_haircut = tk.Button(window, text="Remove Customer", command=remove_selected_haircut)
+        remove_haircut.place(x=850, y=600)
+
+        remove_booking = tk.Button(window, text="Remove Customer", command=remove_selected_booking)
+        remove_booking.place(x=1450, y=600)
 
         window.mainloop()
 
@@ -308,7 +370,7 @@ class UIManager:
 
     def bookings(self):
         def on_date_select():
-            selected_date = f"{year_spinbox.get()}-{int(month_spinbox.get()):02d}-{int(day_spinbox.get()):02d}"
+            selected_date = f"{int(month_spinbox.get()):02d}-{int(day_spinbox.get()):02d}"
             available_slots = self.db.get_available_slots(selected_date)
             time_listbox.delete(0, tk.END)
             for time in available_slots:
@@ -322,11 +384,6 @@ class UIManager:
 
         frame = ttk.Frame(bookings_widget)
         frame.pack(pady=10)
-
-        ttk.Label(frame, text="Year:").grid(row=0, column=0)
-        year_spinbox = ttk.Spinbox(frame, from_=2000, to=2100, width=5, wrap=True)
-        year_spinbox.set(datetime.now().year)
-        year_spinbox.grid(row=0, column=1)
 
         ttk.Label(frame, text="Month:").grid(row=0, column=2)
         month_spinbox = ttk.Spinbox(frame, from_=1, to=12, width=3, wrap=True)
