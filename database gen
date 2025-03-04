@@ -11,15 +11,15 @@ def generate_random_email():
     return f"{generate_random_string(5)}@gmail.com"
 
 def generate_random_date_of_birth():
-    start_date = datetime(1970, 1, 1)
-    end_date = datetime(2000, 1, 1)
+    start_date = datetime(2025, 1, 1)
+    end_date = datetime(2025, 12, 28)
     delta = end_date - start_date
     random_days = random.randint(0, delta.days)
     birth_date = start_date + timedelta(days=random_days)
     return birth_date.strftime('%Y-%m-%d')
 
 def generate_random_time():
-    return f"{random.randint(0, 23):02}:{random.randint(0, 59):02}"
+    return f"{random.randint(9, 17):02}:{random.randint(0, 0):02}"
 
 def generate_random_haircut_name():
     haircuts = ["Buzz Cut", "Pompadour", "Crew Cut", "Fade", "Undercut", "Caesar Cut", "Quiff", "Taper"]
@@ -112,7 +112,7 @@ def insert_data(cursor):
                           VALUES (?, ?)''', staff)
 
     # Generate and append a booking (using a random customer and haircut)
-    for _ in range(50):
+    for _ in range(60):
         bookings.append((
             random.randint(1, 50),  # CustomerID (randomly selecting from the 50 generated customers)
             random.randint(1, 50),  # HaircutID (randomly selecting from the generated haircuts)
