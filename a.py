@@ -37,6 +37,13 @@ class AuthManager:
             hashed_password = self.hash_password(password, salt=customer[5])
             return hashed_password == customer[4]
         return False
+    def staff_check(self,Staff_Number):
+        staff = self.db.fetch_staff_number(Staff_Number)
+        if staff:
+            return True
+        else:
+            return False
+
 
 class DatabaseManager:
     def __init__(self):
@@ -56,7 +63,7 @@ class DatabaseManager:
 
         self.cursor.execute('''CREATE TABLE IF NOT EXISTS Haircut (
             HaircutID INTEGER PRIMARY KEY AUTOINCREMENT,
-            Haircut Name TEXT,
+            Haircut_Name TEXT,
             Price REAL,
             Estimated_Time TEXT)''')
 
@@ -88,6 +95,8 @@ class DatabaseManager:
     def fetch_customer_email(self, email):
         self.cursor.execute("SELECT * FROM Customer WHERE Email=?", (email,))
         return self.cursor.fetchone()
+    def fetch_staff_number(self, Staff_Number):
+        self.cursor.execute("SELECT * FROM Staff WHERE Staff_Number=?", (Staff_Number,))
 
     def fetch_all_customers(self):
         self.cursor.execute("SELECT * FROM Customer")
@@ -101,22 +110,21 @@ class DatabaseManager:
         self.cursor.execute("SELECT * FROM Booking")
         return self.cursor.fetchall()
 
+    def fetch_all_staff(self):
+        self.cursor.execute("SELECT * FROM Staff")
+        return self.cursor.fetchall()
+
     def fetch_all_data(self):
         customers = self.fetch_all_customers()
         haircuts = self.fetch_all_haircuts()
         bookings = self.fetch_all_bookings()
         return {"customers": customers, "haircuts": haircuts, "bookings": bookings}
 
-    def get_available_slots(self,date):
-        booked_slots = []
-        unbooked_slots = []
+    def get_available_slots(self, date):
         booked_slots = self.cursor.execute("SELECT Time FROM Booking WHERE Date = ?", (date,)).fetchall()
-        for time in booked_slots:
-            booked_slots.append(time[0])
-        times = [f"{hour:02d}:00" for hour in range(9,18)]
-        for time in times:
-            if time not in booked_slots:
-                unbooked_slots.append(time)
+        booked_times = [time[0] for time in booked_slots]
+        times = [f"{hour:02d}:00" for hour in range(9, 18)]
+        unbooked_slots = [time for time in times if time not in booked_times]
         return unbooked_slots
 
     def remove_customer(self, CustomerID):
@@ -152,13 +160,7 @@ class UIManager:
 
         tk.Button(window, text="Register", command=lambda: [window.destroy(), self.app.register()]).place(x=500, y=400)
 
-        tk.Button(window, text="Staff Login", command=lambda: [window.destroy(), self.app.staff_login()]).place(x=500,
-                                                                                                                y=500)
-
-        tk.Button(window, text="View Database", command=self.show_database).place(x=500, y=600)
-
         window.mainloop()
-
     def show_database(self):
         def remove_selected_booking():
             selected_booking = booking_box.curselection()
@@ -216,14 +218,17 @@ class UIManager:
         tk.Label(window, text="Haircuts", font=("Helvetica", 12)).place(x=900, y=0)
         tk.Label(window, text="Bookings", font=("Helvetica", 12)).place(x=1500, y=0)
 
-        customer_list = tk.Listbox(window, width=90, height=30)
+        customer_list = tk.Listbox(window, width=50, height=30)
         customer_list.place(x=50, y=50)
 
-        haircut_box = tk.Listbox(window, width=90, height=30)
-        haircut_box.place(x=650, y=50)
+        haircut_box = tk.Listbox(window, width=50, height=30)
+        haircut_box.place(x=450, y=50)
 
-        booking_box = tk.Listbox(window, width=90, height=30)
-        booking_box.place(x=1250, y=50)
+        booking_box = tk.Listbox(window, width=50, height=30)
+        booking_box.place(x=850, y=50)
+
+        staff_box = tk.Listbox(window, width=50, height=30)
+        staff_box.place(x=1250, y=50)
 
         for customer in data["customers"]:
             customer_list.insert(tk.END,
@@ -237,18 +242,21 @@ class UIManager:
         for booking in data["bookings"]:
             booking_box.insert(tk.END,
                                f"BookingID: {booking[0]}, Date: {booking[1]}, Time: {booking[2]}")
+        for staff in data["staff"]:
+            staff_box.insert(tk.END,
+                               f"StaffID: {staff[0]}, Email: {staff[1]}, Staff: {staff[2]}")
 
         close_button = tk.Button(window, text="Close", command=window.destroy)
-        close_button.place(x=800, y=600)
+        close_button.place(x=850, y=700)
 
         remove_customer = tk.Button(window, text="Remove Customer", command=remove_selected_customer)
-        remove_customer.place(x=250, y=600)
+        remove_customer.place(x=250, y=300)
 
-        remove_haircut = tk.Button(window, text="Remove Customer", command=remove_selected_haircut)
-        remove_haircut.place(x=850, y=600)
+        remove_haircut = tk.Button(window, text="Remove Haircut", command=remove_selected_haircut)
+        remove_haircut.place(x=650, y=300)
 
-        remove_booking = tk.Button(window, text="Remove Customer", command=remove_selected_booking)
-        remove_booking.place(x=1450, y=600)
+        remove_booking = tk.Button(window, text="Remove Booking", command=remove_selected_booking)
+        remove_booking.place(x=850, y=300)
 
         window.mainloop()
 
@@ -321,11 +329,19 @@ class UIManager:
         back_button.place(x=30, y=300)
 
         register_widget.mainloop()
+    def staff_login(self):
+        login_widget = tk.Tk()
+        login_widget.title("Staff Login")
+        login_widget.geometry("400x400")
 
+        staffID_entry = tk.Entry(login_widget)
+        tk.Label(login_widget, text="ID").place(x=150, y=50)
+        login_button = tk.Button(login_widget, text="Login", command=self.auth.staff_login)
+        login_button.place(x=250, y=150)
     def login(self):
         def attempt_login():
-            email = e1.get()
-            password = e2.get()
+            email = email_entry.get()
+            password = password_entry.get()
             if self.auth.login_check(email, password):
                 messagebox.showinfo("Success", "Login successful!")
                 login_widget.destroy()
@@ -340,10 +356,10 @@ class UIManager:
         tk.Label(login_widget, text="Email").place(x=150, y=50)
         tk.Label(login_widget, text="Password").place(x=150, y=100)
 
-        e1 = tk.Entry(login_widget)
-        e1.place(x=250, y=50)
-        e2 = tk.Entry(login_widget, show="*")
-        e2.place(x=250, y=100)
+        email_entry = tk.Entry(login_widget)
+        email_entry.place(x=250, y=50)
+        password_entry = tk.Entry(login_widget, show="*")
+        password_entry.place(x=250, y=100)
 
         login_button = tk.Button(login_widget, text="Login", command=attempt_login)
         login_button.place(x=250, y=150)
@@ -370,7 +386,8 @@ class UIManager:
 
     def bookings(self):
         def on_date_select():
-            selected_date = f"{int(month_spinbox.get()):02d}-{int(day_spinbox.get()):02d}"
+            selected_year = year_spinbox.get()
+            selected_date = f"{selected_year}-{int(month_spinbox.get()):02d}-{int(day_spinbox.get()):02d}"
             available_slots = self.db.get_available_slots(selected_date)
             time_listbox.delete(0, tk.END)
             for time in available_slots:
@@ -384,6 +401,11 @@ class UIManager:
 
         frame = ttk.Frame(bookings_widget)
         frame.pack(pady=10)
+
+        ttk.Label(frame, text="Year:").grid(row=0, column=0)
+        year_spinbox = ttk.Spinbox(frame, from_=2020, to=2025, width=6, wrap=True)
+        year_spinbox.set(datetime.now().year)
+        year_spinbox.grid(row=0, column=1)
 
         ttk.Label(frame, text="Month:").grid(row=0, column=2)
         month_spinbox = ttk.Spinbox(frame, from_=1, to=12, width=3, wrap=True)
@@ -447,8 +469,8 @@ class BarberApp:
         tk.Label(main_window, text="Predictive Analytics", font=("Helvetica", 12)).place(x=600, y=120)
         tk.Button(main_window, text="Continue").place(x=600, y=175)
 
-        tk.Label(main_window, text="Pricing", font=("Helvetica", 12)).place(x=900, y=120)
-        tk.Button(main_window, text="Continue", command=lambda: [main_window.destroy()]).place(x=900, y=175)
+        tk.Label(main_window, text="View database", font=("Helvetica", 12)).place(x=900, y=120)
+        tk.Button(main_window, text="View Database", command=self.ui.show_database).place(x=900, y=175)
 
         main_window.mainloop()
 
