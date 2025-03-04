@@ -81,6 +81,13 @@ class DatabaseManager:
             Email TEXT,
             Staff_Number TEXT)''')
 
+    def insert_admin(self):
+        self.cursor.execute("SELECT * FROM Staff WHERE Email=?", ('admin',))
+        admin = self.cursor.fetchone()
+
+        if not admin:
+            self.cursor.execute('''INSERT INTO Staff (Email, Staff_Number) VALUES (?, ?)''', ('admin', 'admin'))
+            self.connection.commit()
     def check_table(self):
         self.cursor.execute("PRAGMA table_info(Customer);")
         ys = self.cursor.fetchall()
@@ -91,6 +98,14 @@ class DatabaseManager:
         Hashed_Password, Salt, Date_Of_Birth) VALUES (?, ?, ?, ?, ?, ?)''', (surname, firstname, email,
                                                                              hashed_password, salt, date_of_birth))
         self.connection.commit()
+
+    def insert_haircut(self, haircutname, price, estimated_time):
+        self.cursor.execute('''INSERT INTO Haircut (Haircut_Name, Price, Estimated_Time) VALUES (?,?,?)''',
+                            (haircutname, price, estimated_time))
+
+    def insert_booking(self, date, time, customerID, haircutID):
+        self.cursor.execute('''INSERT INTO Booking (Date, Time, CustomerID, HaircutID) VALUES (?,?,?,?)''',
+                            (date,time,customerID,haircutID))
 
     def fetch_customer_email(self, email):
         self.cursor.execute("SELECT * FROM Customer WHERE Email=?", (email,))
@@ -214,9 +229,9 @@ class UIManager:
         window.title("Database Contents")
         window.geometry("1920x1080")
 
-        tk.Label(window, text="Customers", font=("Helvetica", 12)).place(x=300, y=0)
-        tk.Label(window, text="Haircuts", font=("Helvetica", 12)).place(x=900, y=0)
-        tk.Label(window, text="Bookings", font=("Helvetica", 12)).place(x=1500, y=0)
+        tk.Label(window, text="Customers", font=("Helvetica", 12)).place(x=150, y=0)
+        tk.Label(window, text="Haircuts", font=("Helvetica", 12)).place(x=750, y=0)
+        tk.Label(window, text="Bookings", font=("Helvetica", 12)).place(x=1250, y=0)
 
         customer_list = tk.Listbox(window, width=50, height=30)
         customer_list.place(x=50, y=50)
@@ -335,9 +350,10 @@ class UIManager:
         login_widget.geometry("400x400")
 
         staffID_entry = tk.Entry(login_widget)
-        tk.Label(login_widget, text="ID").place(x=150, y=50)
-        login_button = tk.Button(login_widget, text="Login", command=self.auth.staff_login)
-        login_button.place(x=250, y=150)
+        staffID_entry.place(x=150,y=100)
+        tk.Label(login_widget, text="Enter your ID").place(x=150, y=50)
+        login_button = tk.Button(login_widget, text="Login", command=self.auth.staff_check())
+        login_button.place(x=200, y=150)
     def login(self):
         def attempt_login():
             email = email_entry.get()
@@ -430,15 +446,6 @@ class UIManager:
         bookings_widget.title("Bookings")
         bookings_widget.geometry("800x800")
 
-    def staff_login(self):
-        staff_login_widget = tk.Tk()
-        staff_login_widget.title("Login")
-        staff_login_widget.geometry("800x800")
-
-
-
-        staff_login_widget.mainloop()
-
 class BarberApp:
     def __init__(self):
         self.db = DatabaseManager()
@@ -469,8 +476,8 @@ class BarberApp:
         tk.Label(main_window, text="Predictive Analytics", font=("Helvetica", 12)).place(x=600, y=120)
         tk.Button(main_window, text="Continue").place(x=600, y=175)
 
-        tk.Label(main_window, text="View database", font=("Helvetica", 12)).place(x=900, y=120)
-        tk.Button(main_window, text="View Database", command=self.ui.show_database).place(x=900, y=175)
+        tk.Label(main_window, text="View Database", font=("Helvetica", 12)).place(x=900, y=120)
+        tk.Button(main_window, text="View Database", command=self.ui.staff_login).place(x=900, y=175)
 
         main_window.mainloop()
 
