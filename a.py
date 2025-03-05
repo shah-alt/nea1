@@ -43,8 +43,6 @@ class AuthManager:
             return True
         else:
             return False
-
-
 class DatabaseManager:
     def __init__(self):
         self.connection = sqlite3.connect("barberdb.db")
@@ -176,6 +174,7 @@ class UIManager:
         tk.Button(window, text="Register", command=lambda: [window.destroy(), self.app.register()]).place(x=500, y=400)
 
         window.mainloop()
+
     def show_database(self):
         def remove_selected_booking():
             selected_booking = booking_box.curselection()
@@ -344,6 +343,7 @@ class UIManager:
         back_button.place(x=30, y=300)
 
         register_widget.mainloop()
+
     def staff_login(self):
         login_widget = tk.Tk()
         login_widget.title("Staff Login")
@@ -352,8 +352,9 @@ class UIManager:
         staffID_entry = tk.Entry(login_widget)
         staffID_entry.place(x=150,y=100)
         tk.Label(login_widget, text="Enter your ID").place(x=150, y=50)
-        login_button = tk.Button(login_widget, text="Login", command=self.auth.staff_check())
-        login_button.place(x=200, y=150)
+        login_button = tk.Button(login_widget, text="Login", command=lambda: self.auth.staff_check(staffID_entry))
+        login_button.place(x=150, y=150)
+
     def login(self):
         def attempt_login():
             email = email_entry.get()
