@@ -71,6 +71,7 @@ class DatabaseManager:
             Time TEXT,
             CustomerID INTEGER,
             HaircutID INTEGER,
+            Locked BOOLEAN DEFAULT 0,
             FOREIGN KEY (CustomerID) REFERENCES Customer(CustomerID) ON DELETE CASCADE,
             FOREIGN KEY (HaircutID) REFERENCES Haircut(HaircutID) ON DELETE CASCADE)''')
 
@@ -134,7 +135,7 @@ class DatabaseManager:
         return {"customers": customers, "haircuts": haircuts, "bookings": bookings}
 
     def get_available_slots(self, date):
-        booked_slots = self.cursor.execute("SELECT Time FROM Booking WHERE Date = ?", (date,)).fetchall()
+        booked_slots = self.cursor.execute("SELECT Time FROM Booking WHERE Date = ? AND Locked = 1", (date,)).fetchall()
         booked_times = [time[0] for time in booked_slots]
         times = [f"{hour:02d}:00" for hour in range(9, 18)]
         unbooked_slots = [time for time in times if time not in booked_times]
@@ -285,7 +286,6 @@ class UIManager:
                 return True
             except:
                 return False
-
         def create():
             new_email = email_entry.get()
             new_password = password_entry.get()
@@ -394,6 +394,13 @@ class UIManager:
 
         pricing_widget.mainloop()
 
+    def create_booking_page(self):
+        booking_widget = tk.Tk()
+        booking_widget.title("Create a booking")
+        booking_widget.geometry("800x800")
+
+
+
     def predictive_analytics(self):
         analytics_widget = tk.Tk()
         analytics_widget.title("Login")
@@ -409,6 +416,12 @@ class UIManager:
             time_listbox.delete(0, tk.END)
             for time in available_slots:
                 time_listbox.insert(tk.END, time)
+        def select_time():
+            selected_time = time_listbox.curselection()
+            if not selected_time:
+                messagebox.showerror("Select a time.")
+                return
+            lock_time = datetime.datetime.now() + datetime.timedelta(minutes=15)
 
         bookings_widget = tk.Tk()
         bookings_widget.title("Bookings")
@@ -440,6 +453,10 @@ class UIManager:
         time_listbox = tk.Listbox(bookings_widget)
         time_listbox.pack(pady=10)
 
+        selection = ttk.Button(bookings_widget, text="Select", command=lambda: [bookings_widget.destroy(),
+                                                                                select_time(),
+                                                                                self.create_booking_page()])
+        selection.place(x=360,y=350)
         bookings_widget.mainloop()
 
 
@@ -481,6 +498,68 @@ class BarberApp:
         tk.Button(main_window, text="View Database", command=self.ui.staff_login).place(x=900, y=175)
 
         main_window.mainloop()
+
+class BookingManager:
+    import time
+
+    class BookingManager:
+        def __init__(self, db_connection):
+            self.db = db_connection
+            self.cursor = db_connection.cursor()
+
+        def lock_time_slot(self, date, time):
+            """
+            Lock the selected time slot for 10 minutes.
+            """
+            lock_duration = 10 * 60  # 10 minutes in seconds
+            current_time = time.time()  # Get the current time in seconds
+
+            lock_end_time = current_time + lock_duration  # Calculate lock expiration time
+
+            # Update the 'Locked' status for this time slot
+            self.cursor.execute('''
+                UPDATE Booking 
+                SET Locked = 1, LockEndTime = ? 
+                WHERE Date = ? AND Time = ?
+            ''', (lock_end_time, date, time))
+            self.db.connection.commit()
+
+        def get_available_slots(self, date):
+            booked_slots = self.cursor.execute("SELECT Time, Locked, LockEndTime FROM Booking WHERE Date = ?",
+                                               (date,)).fetchall()
+            booked_times = []
+
+            current_time = time.time()  # Get the current time in seconds
+
+            for booked_time, locked, lock_end_time in booked_slots:
+                if locked:
+                    if current_time > lock_end_time:
+                        self.cursor.execute('''UPDATE Booking SET Locked = 0 WHERE Date = ? AND Time = ?''',
+                                            (date, booked_time))
+                        self.db.connection.commit()
+                    else:
+                        booked_times.append(booked_time)
+                else:
+                    booked_times.append(booked_time)
+
+            times = [f"{hour:02d}:00" for hour in range(9, 18)]
+            unbooked_slots = [time for time in times if time not in booked_times]
+
+            return unbooked_slots
+
+        def book_slot(self, date, time, customer_id, haircut_id):
+
+            available_slots = self.get_available_slots(date)
+            if time not in available_slots:
+                raise Exception(f"The time slot {time} is not available.")
+
+            self.cursor.execute('''
+                INSERT INTO Booking (Date, Time, CustomerID, HaircutID, Locked) 
+                VALUES (?, ?, ?, ?, 0)
+            ''', (date, time, customer_id, haircut_id))
+            self.db.connection.commit()
+
+            return f"Booking successful for {time} on {date}."
 
 
 if __name__ == "__main__":
