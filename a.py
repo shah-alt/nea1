@@ -2,7 +2,7 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 import sqlite3
 import random
-from datetime import datetime, timedelta
+from datetime import datetime, time
 import re
 
 
@@ -398,6 +398,18 @@ class UIManager:
         booking_widget = tk.Tk()
         booking_widget.title("Create a booking")
         booking_widget.geometry("800x800")
+        
+        haircuts = self.cursor.execute('''SELECT Haircut_Name FROM Haircut''')
+        card_number = ttk.Entry
+        card_number.place(x=100, y=20)
+        card_cvc = ttk.Entry
+        card_cvc.place(x=100, y=30)
+        expiry_date = ttk.Entry
+        expiry_date.place(x=100, y=40)
+        haircut_type = ttk.StringVar()
+        haircut_dropdown = ttk.OptionMenu(booking_widget, haircut_type,  )
+        
+        
 
 
 
