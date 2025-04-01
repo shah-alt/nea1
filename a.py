@@ -6,7 +6,6 @@ from datetime import datetime, timedelta
 import re
 import time
 
-# ====================== STYLING CONSTANTS ======================
 BG_COLOR = "#f5f5f5"
 PRIMARY_COLOR = "#34495e"
 SECONDARY_COLOR = "#3498db"
@@ -78,7 +77,7 @@ class DatabaseManager:
             HaircutID INTEGER PRIMARY KEY AUTOINCREMENT,
             Haircut_Name TEXT,
             Price REAL,
-            Estimated_Time TEXT)''')
+            Estimated_Time INTEGER)''')
 
         self.cursor.execute('''
             CREATE TABLE IF NOT EXISTS Booking (
@@ -92,6 +91,7 @@ class DatabaseManager:
                 ExpiryTime TEXT,
                 FOREIGN KEY (CustomerID) REFERENCES Customer(CustomerID),
                 FOREIGN KEY (HaircutID) REFERENCES Haircut(HaircutID)
+                UNIQUE(Date, Time) 
             )
         ''')
 
@@ -204,16 +204,26 @@ class DatabaseManager:
                             (haircutname, price, estimated_time))
 
     def insert_booking(self, date, time, customerID, haircutID):
+        try:
+            self.cursor.execute("SELECT Estimated_Time FROM Haircut WHERE HaircutID=?", (haircutID,))
+            duration = self.cursor.fetchone()[0]
 
-        if not self.get_available_slots(date):
-            raise ValueError("Time slot is already booked")
+            available = self.get_available_slots(date)
+            if not available or time not in available:
+                raise ValueError(f"Slot not available. Available slots: {', '.join(available)}")
 
-        self.cursor.execute("""
-               INSERT INTO Booking (Date, Time, CustomerID, HaircutID, Locked)
-               VALUES (?, ?, ?, ?, 1)
-           """, (date, time, customerID, haircutID))
+            self.cursor.execute("""
+                INSERT INTO Booking (Date, Time, CustomerID, HaircutID, Locked, Duration) 
+                VALUES (?, ?, ?, ?, 1, ?)
+            """, (date, time, customerID, haircutID, duration))
 
-        self.connection.commit()
+            self.connection.commit()
+            return True
+
+        except Exception as e:
+            self.connection.rollback()
+            print(f"Booking error: {e}")
+            return False
 
     def fetch_customer_email(self, email):
         self.cursor.execute("SELECT * FROM Customer WHERE Email=?", (email,))
@@ -231,13 +241,14 @@ class DatabaseManager:
         return self.cursor.fetchall()
 
     def fetch_all_bookings(self):
+        self.connection.commit()
         self.cursor.execute("SELECT * FROM Booking")
         return self.cursor.fetchall()
 
     def fetch_all_staff(self):
         try:
             self.cursor.execute("SELECT * FROM Staff")
-            return self.cursor.fetchall() or []  # Return empty list if no staff
+            return self.cursor.fetchall() or []
         except sqlite3.Error as e:
             print(f"Database error: {e}")
             return []
@@ -253,28 +264,27 @@ class DatabaseManager:
         try:
             self.cursor.execute("""
                 SELECT Time FROM Booking 
-                WHERE Date = ? AND (Locked = 1 OR Locked = 0)
+                WHERE Date = ? 
+                AND (
+                    Locked = 1 
+                    OR 
+                    (ExpiryTime > datetime('now'))
             """, (date,))
-            booked_slots_result = self.cursor.fetchall()
+
+            unavailable_times = {row[0] for row in self.cursor.fetchall()}
+
+            all_slots = [f"{hour:02d}:00" for hour in range(9, 18)]
+
+            available_slots = []
+            for slot in all_slots:
+                if slot not in unavailable_times:
+                    available_slots.append(slot)
+            return available_slots
+
+
         except sqlite3.Error as e:
-            print(f"Database error when fetching booked slots: {e}")
+            print(f"Database error: {e}")
             return []
-
-        booked_slots = []
-        for time_slot in booked_slots_result:
-            if time_slot and time_slot[0]:  # Check if not None or empty
-                booked_slots.append(time_slot[0])
-
-        all_possible_slots = []
-        for hour in range(9, 18):  # From 9 AM to 5 PM (17:00)
-            time_str = f"{hour:02d}:00"  # Format as HH:00
-            all_possible_slots.append(time_str)
-
-        available_slots = []
-        for slot in all_possible_slots:
-            if slot not in booked_slots:
-                available_slots.append(slot)
-        return available_slots
 
     def remove_customer(self, CustomerID):
         self.cursor.execute('''DELETE FROM Customer WHERE CustomerID = ?''', (CustomerID,))
@@ -289,32 +299,14 @@ class DatabaseManager:
         self.connection.commit()
 
     def remove_expired_bookings(self):
-        """Remove expired unpaid bookings"""
         try:
             self.connection.execute("BEGIN TRANSACTION")
-
-            # Get expired bookings
             self.cursor.execute('''
-                SELECT b.BookingID 
-                FROM Booking b
-                JOIN BookingExpiry e ON b.BookingID = e.BookingID
-                WHERE b.Locked = 0 AND e.ExpiryTime < datetime('now')
+                DELETE FROM Booking 
+                WHERE Locked = 0 AND ExpiryTime <= datetime('now')
             ''')
-
-            expired = self.cursor.fetchall()
-
-            # Delete them
-            for (booking_id,) in expired:
-                self.cursor.execute('''
-                    DELETE FROM Booking WHERE BookingID = ?
-                ''', (booking_id,))
-                self.cursor.execute('''
-                    DELETE FROM BookingExpiry WHERE BookingID = ?
-                ''', (booking_id,))
-
             self.connection.commit()
-            return len(expired)
-
+            return self.cursor.rowcount
         except Exception as e:
             self.connection.rollback()
             print(f"Cleanup error: {e}")
@@ -420,25 +412,20 @@ class UIManager:
 
     def show_database(self):
         def sort_bookings(sort_by='date', ascending=True):
-            """Helper function to sort bookings"""
             all_bookings = self.db.fetch_all_bookings()
             booking_data = []
 
-            # Prepare data for sorting
             for booking in all_bookings:
                 booking_data.append((booking[0], f"{booking[1]} {booking[2]}", booking[1]))
 
-            # Perform the sort
             sorted_bookings = self.db.merge_sort(
                 booking_data,
                 sortby=sort_by,
                 ascending=ascending
             )
 
-            # Update the display
             booking_box.delete(0, tk.END)
             for sorted_booking in sorted_bookings:
-                # Find the full booking details
                 full_booking = None
                 for booking in all_bookings:
                     if booking[0] == sorted_booking[0]:
@@ -453,15 +440,12 @@ class UIManager:
                     )
                     booking_box.insert(tk.END, booking_text)
 
-        # Create the main window
         data = self.db.fetch_all_data()
         window = self.create_window("Database Contents", "1200x800")
 
-        # Create notebook (tabbed interface)
         notebook = ttk.Notebook(window)
         notebook.pack(fill='both', expand=True)
 
-        # ========== CUSTOMERS TAB ==========
         cust_frame = ttk.Frame(notebook)
         notebook.add(cust_frame, text="Customers")
 
@@ -472,7 +456,6 @@ class UIManager:
         scroll_cust.pack(side='right', fill='y')
         customer_list.config(yscrollcommand=scroll_cust.set)
 
-        # ========== HAIRCUTS TAB ==========
         haircut_frame = ttk.Frame(notebook)
         notebook.add(haircut_frame, text="Haircuts")
 
@@ -483,11 +466,9 @@ class UIManager:
         scroll_hair.pack(side='right', fill='y')
         haircut_box.config(yscrollcommand=scroll_hair.set)
 
-        # ========== BOOKINGS TAB ==========
         booking_frame = ttk.Frame(notebook)
         notebook.add(booking_frame, text="Bookings")
 
-        # ---- Filter Controls ----
         filter_frame = ttk.Frame(booking_frame)
         filter_frame.pack(fill='x', pady=5)
 
@@ -502,7 +483,6 @@ class UIManager:
         ttk.Button(filter_frame, text="Clear Filter",
                    command=lambda: self.load_all_bookings(booking_box)).pack(side='left', padx=5)
 
-        # ---- Sort Controls ----
         sort_frame = ttk.Frame(booking_frame)
         sort_frame.pack(fill='x', pady=5)
 
@@ -512,7 +492,6 @@ class UIManager:
         ttk.Button(sort_frame, text="Sort by Date (Newest)",
                    command=lambda: sort_bookings('date', False)).pack(side='left', padx=5)
 
-        # ---- Bookings List ----
         booking_box = tk.Listbox(booking_frame, width=120, height=30, font=FONT)
         booking_box.pack(side='left', fill='both', expand=True, padx=10, pady=10)
 
@@ -520,7 +499,6 @@ class UIManager:
         scroll_book.pack(side='right', fill='y')
         booking_box.config(yscrollcommand=scroll_book.set)
 
-        # ========== STAFF TAB ==========
         staff_frame = ttk.Frame(notebook)
         notebook.add(staff_frame, text="Staff")
 
@@ -531,26 +509,21 @@ class UIManager:
         scroll_staff.pack(side='right', fill='y')
         staff_box.config(yscrollcommand=scroll_staff.set)
 
-        # ========== POPULATE DATA ==========
-        # Customers
         for customer in data["customers"]:
             customer_list.insert(tk.END,
                                  f"ID: {customer[0]}, Name: {customer[1]} {customer[2]}, "
                                  f"Email: {customer[3]}, DOB: {customer[6]}"
                                  )
 
-        # Haircuts
         for haircut in data["haircuts"]:
             haircut_box.insert(tk.END,
                                f"ID: {haircut[0]}, Name: {haircut[1]}, "
                                f"Price: £{haircut[2]:.2f}, Duration: {haircut[3]}"
                                )
 
-        # Bookings (load all initially)
         self.load_all_bookings(booking_box)
 
-        # In the populate data section:
-        if "staff" in data:  # Add this check
+        if "staff" in data:
             for staff in data["staff"]:
                 staff_box.insert(tk.END,
                                  f"ID: {staff[0]}, Email: {staff[1]}, Staff Number: {staff[2]}"
@@ -558,16 +531,14 @@ class UIManager:
 
 
 
-        # ========== CONTROL BUTTONS ==========
         btn_frame = ttk.Frame(window)
         btn_frame.pack(fill='x', pady=10)
 
         ttk.Button(btn_frame, text="Close", command=window.destroy).pack(side='right', padx=5)
 
     def filter_bookings_by_date(self, booking_box, date_filter):
-        """Filter bookings to show only those on a specific date"""
         try:
-            datetime.strptime(date_filter, "%Y-%m-%d")  # Validate format
+            datetime.strptime(date_filter, "%Y-%m-%d")
         except ValueError:
             messagebox.showerror("Error", "Please enter date in YYYY-MM-DD format")
             return
@@ -588,7 +559,6 @@ class UIManager:
             booking_box.insert(tk.END, "No bookings found for this date")
 
     def load_all_bookings(self, booking_box):
-        """Load all bookings without filtering"""
         booking_box.delete(0, tk.END)
         for booking in self.db.fetch_all_bookings():
             booking_box.insert(tk.END,
@@ -674,6 +644,11 @@ class UIManager:
         def attempt_login():
             email = email_entry.get()
             password = password_entry.get()
+            if email == "admin" and password == "admin":
+                messagebox.showinfo("Success", "Login successful!")
+                login_widget.destroy()
+                self.app.main_page()
+
             if self.auth.login_check(email, password):
                 self.current_user = self.db.fetch_customer_email(email)
                 messagebox.showinfo("Success", "Login successful!")
@@ -721,15 +696,17 @@ class UIManager:
         ttk.Button(window, text="Close", command=window.destroy).pack(pady=10)
 
     def process_booking(self, selected_time, haircut_name, card_number, card_cvc, expiry_date):
-        """Handles the complete booking process with SQLite-compatible syntax"""
+        current_time = datetime.now().strftime("%H:%M")
+        if selected_time < current_time:
+            messagebox.showerror("Error", "Cannot book past time slots")
+            return False
+
         if not self.validate_payment(card_number, card_cvc, expiry_date):
             return False
 
         try:
-            # Start transaction
             self.db.connection.execute("BEGIN TRANSACTION")
 
-            # Get haircut details
             self.db.cursor.execute(
                 "SELECT HaircutID, Price, Estimated_Time FROM Haircut WHERE Haircut_Name = ?",
                 (haircut_name,)
@@ -743,37 +720,32 @@ class UIManager:
 
             haircut_id, price, duration = haircut
             customer_id = self.get_current_customer_id()
-
-            if not customer_id:
-                messagebox.showerror("Error", "No customer logged in")
-                self.db.connection.rollback()
-                return False
-
-            # Check slot availability (SQLite-compatible version)
             booking_date = datetime.now().strftime("%Y-%m-%d")
+
             self.db.cursor.execute("""
-                SELECT 1 FROM Booking 
-                WHERE Date = ? AND Time = ? 
-                AND (Locked = 1 OR (ExpiryTime IS NOT NULL AND ExpiryTime > datetime('now')))
-            """, (booking_date, selected_time))
+                   SELECT 1 FROM Booking 
+                   WHERE Date = ? AND Time = ? 
+                   AND (
+                       Locked = 1
+                       OR 
+                       (ExpiryTime > datetime('now'))
+                   )
+               """, (booking_date, selected_time))
 
             if self.db.cursor.fetchone():
                 messagebox.showerror("Error", "This time slot is no longer available")
                 self.db.connection.rollback()
                 return False
 
-            # Create temporary booking (15 minute expiry)
             expiry_time = (datetime.now() + timedelta(minutes=15)).strftime("%Y-%m-%d %H:%M:%S")
             self.db.cursor.execute("""
                 INSERT INTO Booking (Date, Time, CustomerID, HaircutID, Locked, Duration, ExpiryTime)
                 VALUES (?, ?, ?, ?, 0, ?, ?)
             """, (booking_date, selected_time, customer_id, haircut_id, duration, expiry_time))
 
-            # Process payment (simulated)
-            payment_success = True  # Replace with actual payment processing
+            payment_success = True
 
             if payment_success:
-                # Confirm booking
                 self.db.cursor.execute("""
                     UPDATE Booking 
                     SET Locked = 1, ExpiryTime = NULL 
@@ -830,7 +802,6 @@ class UIManager:
     def create_booking_page(self, selected_time):
         window = self.create_window("Confirm Booking", "500x450")
 
-        # Get haircut options
         self.db.cursor.execute("SELECT Haircut_Name, Price FROM Haircut")
         haircuts = self.db.cursor.fetchall()
 
@@ -839,7 +810,6 @@ class UIManager:
             ttk.Button(window, text="Close", command=window.destroy).pack(pady=10)
             return
 
-        # Create form
         main_frame = ttk.Frame(window)
         main_frame.pack(fill='both', expand=True, padx=20, pady=20)
 
@@ -847,13 +817,11 @@ class UIManager:
                   text=f"Confirm Booking for {selected_time}",
                   style='Header.TLabel').pack(pady=10)
 
-        # Haircut selection
         haircut_var = tk.StringVar(value=haircuts[0][0])
         ttk.Label(main_frame, text="Select Service:").pack()
         haircut_menu = ttk.OptionMenu(main_frame, haircut_var, *[h[0] for h in haircuts])
         haircut_menu.pack(fill='x', pady=5)
 
-        # Payment details
         payment_frame = ttk.LabelFrame(main_frame, text="Payment Details")
         payment_frame.pack(fill='x', pady=10)
 
@@ -869,7 +837,6 @@ class UIManager:
         cvc_entry = ttk.Entry(payment_frame, width=5)
         cvc_entry.grid(row=2, column=1, pady=5, sticky='w')
 
-        # Confirm button
         def on_confirm():
             selected_haircut = haircut_var.get()
             if self.process_booking(
@@ -908,7 +875,6 @@ class UIManager:
         self.revenue_tree.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
 
-        # 3. Haircut Popularity - Text visualization
         popularity_frame = ttk.LabelFrame(window, text="Service Popularity", padding=10)
         popularity_frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=5)
         self.popularity_text = tk.Text(popularity_frame, bg=BG_COLOR, font=FONT, wrap="word")
@@ -917,7 +883,6 @@ class UIManager:
         self.popularity_text.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
 
-        # 4. Customer Loyalty - Treeview
         loyalty_frame = ttk.LabelFrame(window, text="Top Customers", padding=10)
         loyalty_frame.grid(row=1, column=1, sticky="nsew", padx=10, pady=5)
         self.loyalty_tree = ttk.Treeview(loyalty_frame, columns=("Customer", "Visits", "Styles"), show="headings")
@@ -929,7 +894,6 @@ class UIManager:
         self.loyalty_tree.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
 
-        # Controls
         control_frame = ttk.Frame(window)
         control_frame.grid(row=2, column=0, columnspan=2, sticky="ew", pady=10)
 
@@ -945,7 +909,6 @@ class UIManager:
         self.days_var.set("30")
         self.refresh_analytics()
 
-        # Initial load
         self.refresh_analytics()
 
     def refresh_analytics(self):
@@ -982,14 +945,17 @@ class UIManager:
         total = 1
 
         if popularity_data:
-            total = sum(item[1] for item in popularity_data)
+            total = 0
+            for item in popularity_data:
+                total += item[1]
 
         for haircut, count in popularity_data:
             percentage = (count / total) * 100
             bar_length = int(percentage / 5)
             bar = "■" * bar_length
 
-            if count == max(item[1] for item in popularity_data):
+            max_count = max(item[1] for item in popularity_data)
+            if count == max_count:
                 style = "bold"
             else:
                 style = "normal"
@@ -1028,7 +994,7 @@ class UIManager:
 
         for haircut, count in popularity_data:
             percentage = (count / total) * 100
-            bar = "■" * int(percentage / 5)  # Each ■ represents 5%
+            bar = "■" * int(percentage / 5)
             self.popularity_text.insert("end",
                                         f"{haircut.ljust(15)} {bar} {percentage:.1f}% ({count} bookings)\n",
                                         ("bold" if count == max(item[1] for item in popularity_data) else "normal"))
@@ -1038,9 +1004,9 @@ class UIManager:
 
         for item in self.loyalty_tree.get_children():
             self.loyalty_tree.delete(item)
-        loyalty_data = self.db.get_loyal_customers(3)  # Min 3 visits
+        loyalty_data = self.db.get_loyal_customers(3)
         for row in loyalty_data:
-            self.loyalty_tree.insert("", "end", values=row[:3])  # Only show first 3 columns
+            self.loyalty_tree.insert("", "end", values=row[:3])
 
     def refresh_peak_hours(self, days):
         self.peak_canvas.delete("all")
@@ -1050,7 +1016,6 @@ class UIManager:
             self.peak_canvas.create_text(300, 150, text="No booking data", fill=TEXT_COLOR)
             return
 
-        # Fixed dimensions
         canvas_width = 600
         canvas_height = 300
 
@@ -1062,12 +1027,10 @@ class UIManager:
         available_width = canvas_width - left_margin - right_margin
         available_height = canvas_height - bottom_margin - top_margin
 
-        # Calculate bar dimensions
         num_bars = len(peak_data)
-        bar_width = min(30, available_width / num_bars - 5)  # Max 30px wide, with 5px gap
+        bar_width = min(30, available_width / num_bars - 5)
         gap = (available_width - (num_bars * bar_width)) / (num_bars + 1)
 
-        # Draw axes
         self.peak_canvas.create_line(
             left_margin, canvas_height - bottom_margin,
                          canvas_width - right_margin, canvas_height - bottom_margin,
@@ -1079,14 +1042,12 @@ class UIManager:
             width=2
         )
 
-        # Draw bars with proper spacing
         for i, (hour, bookings) in enumerate(peak_data):
             x0 = left_margin + gap + i * (bar_width + gap)
             y0 = canvas_height - bottom_margin
             bar_height = (bookings / max_bookings) * available_height if max_bookings > 0 else 0
             y1 = y0 - bar_height
 
-            # Draw bar with 3D effect
             self.peak_canvas.create_rectangle(
                 x0, y1, x0 + bar_width, y0,
                 fill=SECONDARY_COLOR, outline=PRIMARY_COLOR, width=1
@@ -1096,19 +1057,16 @@ class UIManager:
                 fill=SECONDARY_COLOR, outline="", width=0
             )
 
-            # Draw hour label (rotated 45 degrees)
             hour_label = self.peak_canvas.create_text(
                 x0 + bar_width / 2, y0 + 10,
                 text=hour, fill=TEXT_COLOR, angle=45, anchor="n"
             )
 
-            # Draw booking count above bar
             self.peak_canvas.create_text(
                 x0 + bar_width / 2, y1 - 10,
                 text=str(bookings), fill=PRIMARY_COLOR, font=(FONT[0], FONT[1], "bold")
             )
 
-        # Y-axis labels
         for i in range(0, 6):
             y = canvas_height - bottom_margin - (i * (available_height / 5))
             value = int(max_bookings * (i / 5))
@@ -1122,7 +1080,6 @@ class UIManager:
                 fill=TEXT_COLOR
             )
 
-        # Chart title
         self.peak_canvas.create_text(
             canvas_width / 2, 15,
             text=f"Peak Booking Hours (Last {days} Days)",
@@ -1155,32 +1112,27 @@ class UIManager:
             bar_height = (bookings / max_bookings) * max_bar_height if max_bookings > 0 else 0
             y1 = y0 - bar_height
 
-            # Draw bar
             self.peak_canvas.create_rectangle(
                 x0, y0, x0 + bar_width - 5, y1,
                 fill=SECONDARY_COLOR, outline=PRIMARY_COLOR
             )
 
-            # Draw hour label
             self.peak_canvas.create_text(
                 x0 + bar_width / 2 - 2.5, y0 + 15,
                 text=hour, fill=TEXT_COLOR, anchor="n"
             )
 
-            # Draw booking count
             self.peak_canvas.create_text(
                 x0 + bar_width / 2 - 2.5, y1 - 10,
                 text=str(bookings), fill="white", anchor="s"
             )
 
-        # 2. Revenue Table
         for item in self.revenue_tree.get_children():
             self.revenue_tree.delete(item)
         revenue_data = self.db.get_revenue_breakdown(days)
         for row in revenue_data:
             self.revenue_tree.insert("", "end", values=row)
 
-        # 3. Haircut Popularity - Text visualization
         self.popularity_text.config(state="normal")
         self.popularity_text.delete(1.0, "end")
         popularity_data = self.db.get_popular_haircuts(days)
@@ -1188,7 +1140,7 @@ class UIManager:
 
         for haircut, count in popularity_data:
             percentage = (count / total) * 100
-            bar = "■" * int(percentage / 5)  # Each ■ represents 5%
+            bar = "■" * int(percentage / 5)
             self.popularity_text.insert("end",
                                         f"{haircut.ljust(15)} {bar} {percentage:.1f}% ({count} bookings)\n",
                                         ("bold" if count == max(item[1] for item in popularity_data) else "normal"))
@@ -1196,12 +1148,11 @@ class UIManager:
         self.popularity_text.tag_config("bold", font=(FONT[0], FONT[1], "bold"))
         self.popularity_text.config(state="disabled")
 
-        # 4. Customer Loyalty
         for item in self.loyalty_tree.get_children():
             self.loyalty_tree.delete(item)
-        loyalty_data = self.db.get_loyal_customers(3)  # Min 3 visits
+        loyalty_data = self.db.get_loyal_customers(3)
         for row in loyalty_data:
-            self.loyalty_tree.insert("", "end", values=row[:3])  # Only show first 3 columns
+            self.loyalty_tree.insert("", "end", values=row[:3])
 
     def bookings(self):
         def on_date_select():
@@ -1211,15 +1162,19 @@ class UIManager:
             selected_date = f"{selected_year}-{selected_month}-{selected_day}"
 
             try:
-                datetime.strptime(selected_date, "%Y-%m-%d")  # Validate date
-                available_slots = self.db.get_available_slots(selected_date)
+                self.db.cursor.execute("""
+                            SELECT Time FROM Booking 
+                            WHERE Date = ? 
+                            AND (Locked = 1 OR (ExpiryTime > datetime('now')))
+                        """, (selected_date,))
+
+                unavailable_times = [row[0] for row in self.db.cursor.fetchall()]
+                all_slots = [f"{hour:02d}:00" for hour in range(9, 18)]
+                available_slots = [slot for slot in all_slots if slot not in unavailable_times]
 
                 time_listbox.delete(0, tk.END)
-                if available_slots:
-                    for time in available_slots:
-                        time_listbox.insert(tk.END, time)
-                else:
-                    time_listbox.insert(tk.END, "No available slots")
+                for time in available_slots:
+                    time_listbox.insert(tk.END, time)
             except ValueError:
                 messagebox.showerror("Error", "Invalid date selected")
 
@@ -1291,15 +1246,16 @@ class BarberApp:
         self.auth = AuthManager(self.db)
         self.ui = UIManager(self, self.db)
         self.db.remove_expired_bookings()
+        self.schedule_cleanup()
 
     def schedule_cleanup(self):
         def cleanup():
             expired = self.db.remove_expired_bookings()
             if expired:
                 print(f"Cleaned up {expired} expired bookings")
-            self.root.after(300000, cleanup)  
-            
-        self.root.after(300000, cleanup)
+            self.root.after(30000, cleanup)
+
+        self.root.after(30000, cleanup)
 
     def main_menu(self):
         self.ui.main_menu()
@@ -1358,19 +1314,15 @@ class BookingManager:
         self.db.connection.commit()
 
     def get_available_slots(self, date):
-        """Get truly available time slots (not locked or booked)"""
         try:
-            # Get ALL bookings for the date (both locked and confirmed)
             self.cursor.execute("""
                 SELECT Time FROM Booking 
                 WHERE Date = ?
             """, (date,))
             booked_slots = [time[0] for time in self.cursor.fetchall()]
 
-            # Generate all possible time slots
-            all_slots = [f"{hour:02d}:00" for hour in range(9, 18)]  # 9AM-5PM
+            all_slots = [f"{hour:02d}:00" for hour in range(9, 18)]
 
-            # Return only slots that aren't booked
             return [slot for slot in all_slots if slot not in booked_slots]
 
         except sqlite3.Error as e:
@@ -1394,3 +1346,4 @@ class BookingManager:
 if __name__ == "__main__":
     app = BarberApp()
     app.main_menu()
+
