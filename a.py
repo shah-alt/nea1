@@ -80,20 +80,49 @@ class DatabaseManager:
             Price REAL,
             Estimated_Time TEXT)''')
 
-        self.cursor.execute('''CREATE TABLE IF NOT EXISTS Booking (
-            BookingID INTEGER PRIMARY KEY AUTOINCREMENT,
-            Date TEXT,
-            Time TEXT,
-            CustomerID INTEGER,
-            HaircutID INTEGER,
-            Locked BOOLEAN DEFAULT 0,
-            FOREIGN KEY (CustomerID) REFERENCES Customer(CustomerID) ON DELETE CASCADE,
-            FOREIGN KEY (HaircutID) REFERENCES Haircut(HaircutID) ON DELETE CASCADE)''')
+        self.cursor.execute('''
+            CREATE TABLE IF NOT EXISTS Booking (
+                BookingID INTEGER PRIMARY KEY,
+                Date TEXT,
+                Time TEXT,
+                CustomerID INTEGER,
+                HaircutID INTEGER,
+                Locked BOOLEAN DEFAULT 0,
+                Duration TEXT,
+                ExpiryTime TEXT,
+                FOREIGN KEY (CustomerID) REFERENCES Customer(CustomerID),
+                FOREIGN KEY (HaircutID) REFERENCES Haircut(HaircutID)
+            )
+        ''')
 
         self.cursor.execute('''CREATE TABLE IF NOT EXISTS Staff (
             StaffID INTEGER PRIMARY KEY AUTOINCREMENT, 
             Email TEXT,
             Staff_Number TEXT)''')
+
+        self.cursor.execute('''CREATE TABLE IF NOT EXISTS Reservations (
+        ReservationID INTEGER PRIMARY KEY,
+        BookingID INTEGER,
+        Expiring TEXT,
+        FOREIGN KEY (BookingID) REFERENCES Booking(BookingID) ON DELETE CASCADE)''')
+
+        self.cursor.execute('''
+            CREATE TABLE IF NOT EXISTS BookingExpiry (
+                BookingID INTEGER PRIMARY KEY,
+                ExpiryTime TEXT,
+                FOREIGN KEY (BookingID) REFERENCES Booking(BookingID)
+            )
+        ''')
+
+        self.cursor.execute('''
+            CREATE TABLE IF NOT EXISTS PaymentStatus (
+                BookingID INTEGER PRIMARY KEY,
+                Paid BOOLEAN DEFAULT 0,
+                FOREIGN KEY (BookingID) REFERENCES Booking(BookingID)
+            )
+        ''')
+
+        self.insert_admin()
 
     def insert_admin(self):
         self.cursor.execute("SELECT * FROM Staff WHERE Email=?", ('admin',))
@@ -108,6 +137,62 @@ class DatabaseManager:
         ys = self.cursor.fetchall()
         print(ys)
 
+    def get_peak_hours(self, days):
+        self.cursor.execute('''
+            SELECT 
+                strftime('%H:00', Time) AS Hour,
+                COUNT(*) AS Bookings
+            FROM Booking
+            WHERE Date >= date('now', '-' || ? || ' DAYS')
+            GROUP BY Hour
+            ORDER BY Bookings DESC
+        ''', (days,))
+        return self.cursor.fetchall()
+
+    def get_revenue_breakdown(self, period):
+        self.cursor.execute(f'''
+            SELECT 
+                strftime('%Y-%m', Date) AS Period,
+                h.Haircut_Name,
+                SUM(h.Price) AS Revenue,
+                COUNT(*) AS Bookings
+            FROM Booking b
+            JOIN Haircut h ON b.HaircutID = h.HaircutID
+            WHERE Date >= date('now', '-' || ? || ' DAYS')
+            GROUP BY Period, h.HaircutID
+            ORDER BY Period DESC, Revenue DESC
+        ''', (period,))
+        return self.cursor.fetchall()
+
+    def get_popular_haircuts(self, days):
+        self.cursor.execute('''
+            SELECT 
+                h.Haircut_Name,
+                COUNT(*) AS Bookings
+            FROM Booking b
+            JOIN Haircut h ON b.HaircutID = h.HaircutID
+            WHERE b.Date >= date('now', '-' || ? || ' DAYS')
+            GROUP BY h.HaircutID
+            ORDER BY Bookings DESC
+        ''', (days,))
+        return self.cursor.fetchall()
+
+    def get_loyal_customers(self, min_visits):
+        self.cursor.execute('''
+            SELECT 
+                c.FirstName || ' ' || c.Surname AS Customer,
+                COUNT(*) AS Visits,
+                GROUP_CONCAT(DISTINCT h.Haircut_Name) AS Styles,
+                MAX(b.Date) AS LastVisit
+            FROM Booking b
+            JOIN Customer c ON b.CustomerID = c.CustomerID
+            JOIN Haircut h ON b.HaircutID = h.HaircutID
+            GROUP BY b.CustomerID
+            HAVING Visits >= ?
+            ORDER BY Visits DESC
+        ''', (min_visits,))
+        return self.cursor.fetchall()
+
     def insert_customer(self, surname, firstname, email, hashed_password, salt, date_of_birth):
         self.cursor.execute('''INSERT INTO Customer (Surname, FirstName, Email, 
         Hashed_Password, Salt, Date_Of_Birth) VALUES (?, ?, ?, ?, ?, ?)''', (surname, firstname, email,
@@ -119,8 +204,16 @@ class DatabaseManager:
                             (haircutname, price, estimated_time))
 
     def insert_booking(self, date, time, customerID, haircutID):
-        self.cursor.execute('''INSERT INTO Booking (Date, Time, CustomerID, HaircutID) VALUES (?,?,?,?)''',
-                            (date, time, customerID, haircutID))
+
+        if not self.get_available_slots(date):
+            raise ValueError("Time slot is already booked")
+
+        self.cursor.execute("""
+               INSERT INTO Booking (Date, Time, CustomerID, HaircutID, Locked)
+               VALUES (?, ?, ?, ?, 1)
+           """, (date, time, customerID, haircutID))
+
+        self.connection.commit()
 
     def fetch_customer_email(self, email):
         self.cursor.execute("SELECT * FROM Customer WHERE Email=?", (email,))
@@ -142,21 +235,46 @@ class DatabaseManager:
         return self.cursor.fetchall()
 
     def fetch_all_staff(self):
-        self.cursor.execute("SELECT * FROM Staff")
-        return self.cursor.fetchall()
+        try:
+            self.cursor.execute("SELECT * FROM Staff")
+            return self.cursor.fetchall() or []  # Return empty list if no staff
+        except sqlite3.Error as e:
+            print(f"Database error: {e}")
+            return []
 
     def fetch_all_data(self):
         customers = self.fetch_all_customers()
         haircuts = self.fetch_all_haircuts()
         bookings = self.fetch_all_bookings()
-        return {"customers": customers, "haircuts": haircuts, "bookings": bookings}
+        staff = self.fetch_all_staff()
+        return {"customers": customers, "haircuts": haircuts, "bookings": bookings, "staff": staff}
 
     def get_available_slots(self, date):
-        booked_slots = self.cursor.execute("SELECT Time FROM Booking WHERE Date = ? AND Locked = 1", (date,)).fetchall()
-        booked_times = [time[0] for time in booked_slots]
-        times = [f"{hour:02d}:00" for hour in range(9, 18)]
-        unbooked_slots = [time for time in times if time not in booked_times]
-        return unbooked_slots
+        try:
+            self.cursor.execute("""
+                SELECT Time FROM Booking 
+                WHERE Date = ? AND (Locked = 1 OR Locked = 0)
+            """, (date,))
+            booked_slots_result = self.cursor.fetchall()
+        except sqlite3.Error as e:
+            print(f"Database error when fetching booked slots: {e}")
+            return []
+
+        booked_slots = []
+        for time_slot in booked_slots_result:
+            if time_slot and time_slot[0]:  # Check if not None or empty
+                booked_slots.append(time_slot[0])
+
+        all_possible_slots = []
+        for hour in range(9, 18):  # From 9 AM to 5 PM (17:00)
+            time_str = f"{hour:02d}:00"  # Format as HH:00
+            all_possible_slots.append(time_str)
+
+        available_slots = []
+        for slot in all_possible_slots:
+            if slot not in booked_slots:
+                available_slots.append(slot)
+        return available_slots
 
     def remove_customer(self, CustomerID):
         self.cursor.execute('''DELETE FROM Customer WHERE CustomerID = ?''', (CustomerID,))
@@ -170,8 +288,41 @@ class DatabaseManager:
         self.cursor.execute('''DELETE FROM Booking WHERE BookingID = ?''', (BookingID,))
         self.connection.commit()
 
+    def remove_expired_bookings(self):
+        """Remove expired unpaid bookings"""
+        try:
+            self.connection.execute("BEGIN TRANSACTION")
+
+            # Get expired bookings
+            self.cursor.execute('''
+                SELECT b.BookingID 
+                FROM Booking b
+                JOIN BookingExpiry e ON b.BookingID = e.BookingID
+                WHERE b.Locked = 0 AND e.ExpiryTime < datetime('now')
+            ''')
+
+            expired = self.cursor.fetchall()
+
+            # Delete them
+            for (booking_id,) in expired:
+                self.cursor.execute('''
+                    DELETE FROM Booking WHERE BookingID = ?
+                ''', (booking_id,))
+                self.cursor.execute('''
+                    DELETE FROM BookingExpiry WHERE BookingID = ?
+                ''', (booking_id,))
+
+            self.connection.commit()
+            return len(expired)
+
+        except Exception as e:
+            self.connection.rollback()
+            print(f"Cleanup error: {e}")
+            return 0
+
     def merge_sort(self, records, sortby='id', ascending=True):
         fields = ['id', 'name', 'date']
+
         try:
             sort_index = fields.index(sortby)
         except ValueError:
@@ -179,6 +330,7 @@ class DatabaseManager:
 
         if len(records) <= 1:
             return records
+
         mid = len(records) // 2
         leftlist = self.merge_sort(records[:mid], sortby, ascending)
         rightlist = self.merge_sort(records[mid:], sortby, ascending)
@@ -194,17 +346,18 @@ class DatabaseManager:
             left_value = leftlist[left_pointer][sort_index]
             right_value = rightlist[right_pointer][sort_index]
 
-            if sortby == 'date':  # New condition
-                from datetime import datetime
-                left_value = datetime.strptime(left_value, "%Y-%m-%d")
-                right_value = datetime.strptime(right_value, "%Y-%m-%d")
+            if sortby == 'date':
+                try:
+                    left_date = datetime.strptime(left_value, "%Y-%m-%d")
+                    right_date = datetime.strptime(right_value, "%Y-%m-%d")
+                    left_value = left_date
+                    right_value = right_date
+                except ValueError:
+                    pass
             elif str(left_value).isdigit():
                 left_value = int(left_value)
                 right_value = int(right_value)
 
-            if str(left_value).isdigit():
-                left_value = int(left_value)
-                right_value = int(right_value)
             if ascending:
                 if left_value < right_value:
                     sorted_list.append(leftlist[left_pointer])
@@ -219,6 +372,7 @@ class DatabaseManager:
                 else:
                     sorted_list.append(rightlist[right_pointer])
                     right_pointer += 1
+
         sorted_list.extend(leftlist[left_pointer:])
         sorted_list.extend(rightlist[right_pointer:])
         return sorted_list
@@ -265,118 +419,182 @@ class UIManager:
         window.mainloop()
 
     def show_database(self):
-        def remove_selected_booking():
-            selected_booking = booking_box.curselection()
-            if not selected_booking:
-                messagebox.showerror("Error", "Please select a booking to remove")
-                return
+        def sort_bookings(sort_by='date', ascending=True):
+            """Helper function to sort bookings"""
+            all_bookings = self.db.fetch_all_bookings()
+            booking_data = []
 
-            selected_booking_info = booking_box.get(selected_booking[0])
-            BookingID = re.search(r"ID: (\d+)", selected_booking_info)
-            if BookingID:
-                BookingID = int(BookingID.group(1))
-                self.db.remove_booking(BookingID)
-                messagebox.showinfo("Success", f"Booking ID {BookingID} removed successfully.")
-                booking_box.delete(selected_booking)
-            else:
-                messagebox.showerror("Error", "Booking ID could not be extracted.")
+            # Prepare data for sorting
+            for booking in all_bookings:
+                booking_data.append((booking[0], f"{booking[1]} {booking[2]}", booking[1]))
 
-        def remove_selected_haircut():
-            selected_haircut = haircut_box.curselection()
-            if not selected_haircut:
-                messagebox.showerror("Error", "Please select a haircut to remove")
-                return
+            # Perform the sort
+            sorted_bookings = self.db.merge_sort(
+                booking_data,
+                sortby=sort_by,
+                ascending=ascending
+            )
 
-            selected_haircut_info = haircut_box.get(selected_haircut[0])
-            HaircutID = re.search(r"ID: (\d+)", selected_haircut_info)
-            if HaircutID:
-                HaircutID = int(HaircutID.group(1))
-                self.db.remove_haircut(HaircutID)
-                messagebox.showinfo("Success", f"Haircut ID {HaircutID} removed successfully.")
-                haircut_box.delete(selected_haircut)
-            else:
-                messagebox.showerror("Error", "Haircut ID could not be extracted.")
+            # Update the display
+            booking_box.delete(0, tk.END)
+            for sorted_booking in sorted_bookings:
+                # Find the full booking details
+                full_booking = None
+                for booking in all_bookings:
+                    if booking[0] == sorted_booking[0]:
+                        full_booking = booking
+                        break
 
-        def remove_selected_customer():
-            selected_customer = customer_list.curselection()
-            if not selected_customer:
-                messagebox.showerror("Error", "Please select a customer to remove")
-                return
+                if full_booking:
+                    booking_text = (
+                        f"BookingID: {full_booking[0]}, Date: {full_booking[1]}, "
+                        f"Time: {full_booking[2]}, Customer: {full_booking[3]}, "
+                        f"Haircut: {full_booking[4]}, Locked: {full_booking[5]}"
+                    )
+                    booking_box.insert(tk.END, booking_text)
 
-            selected_customer_info = customer_list.get(selected_customer[0])
-            customerID = re.search(r"ID: (\d+)", selected_customer_info)
-            if customerID:
-                customerID = int(customerID.group(1))
-                self.db.remove_customer(customerID)
-                messagebox.showinfo("Success", f"Customer ID {customerID} removed successfully.")
-                customer_list.delete(selected_customer)
-            else:
-                messagebox.showerror("Error", "Customer ID could not be extracted.")
-
-        data = self.app.db.fetch_all_data()
+        # Create the main window
+        data = self.db.fetch_all_data()
         window = self.create_window("Database Contents", "1200x800")
 
+        # Create notebook (tabbed interface)
         notebook = ttk.Notebook(window)
         notebook.pack(fill='both', expand=True)
 
-        # Customers tab
+        # ========== CUSTOMERS TAB ==========
         cust_frame = ttk.Frame(notebook)
         notebook.add(cust_frame, text="Customers")
+
         customer_list = tk.Listbox(cust_frame, width=120, height=30, font=FONT)
         customer_list.pack(side='left', fill='both', expand=True, padx=10, pady=10)
+
         scroll_cust = ttk.Scrollbar(cust_frame, orient='vertical', command=customer_list.yview)
         scroll_cust.pack(side='right', fill='y')
         customer_list.config(yscrollcommand=scroll_cust.set)
 
-        # Haircuts tab
+        # ========== HAIRCUTS TAB ==========
         haircut_frame = ttk.Frame(notebook)
         notebook.add(haircut_frame, text="Haircuts")
+
         haircut_box = tk.Listbox(haircut_frame, width=120, height=30, font=FONT)
         haircut_box.pack(side='left', fill='both', expand=True, padx=10, pady=10)
+
         scroll_hair = ttk.Scrollbar(haircut_frame, orient='vertical', command=haircut_box.yview)
         scroll_hair.pack(side='right', fill='y')
         haircut_box.config(yscrollcommand=scroll_hair.set)
 
-        # Bookings tab
+        # ========== BOOKINGS TAB ==========
         booking_frame = ttk.Frame(notebook)
         notebook.add(booking_frame, text="Bookings")
+
+        # ---- Filter Controls ----
+        filter_frame = ttk.Frame(booking_frame)
+        filter_frame.pack(fill='x', pady=5)
+
+        ttk.Label(filter_frame, text="Filter by Date (YYYY-MM-DD):").pack(side='left', padx=5)
+        date_filter_entry = ttk.Entry(filter_frame, width=12)
+        date_filter_entry.pack(side='left', padx=5)
+
+        ttk.Button(filter_frame, text="Apply Filter",
+                   command=lambda: self.filter_bookings_by_date(booking_box, date_filter_entry.get())).pack(side='left',
+                                                                                                            padx=5)
+
+        ttk.Button(filter_frame, text="Clear Filter",
+                   command=lambda: self.load_all_bookings(booking_box)).pack(side='left', padx=5)
+
+        # ---- Sort Controls ----
+        sort_frame = ttk.Frame(booking_frame)
+        sort_frame.pack(fill='x', pady=5)
+
+        ttk.Button(sort_frame, text="Sort by Date (Oldest)",
+                   command=lambda: sort_bookings('date', True)).pack(side='left', padx=5)
+
+        ttk.Button(sort_frame, text="Sort by Date (Newest)",
+                   command=lambda: sort_bookings('date', False)).pack(side='left', padx=5)
+
+        # ---- Bookings List ----
         booking_box = tk.Listbox(booking_frame, width=120, height=30, font=FONT)
         booking_box.pack(side='left', fill='both', expand=True, padx=10, pady=10)
+
         scroll_book = ttk.Scrollbar(booking_frame, orient='vertical', command=booking_box.yview)
         scroll_book.pack(side='right', fill='y')
         booking_box.config(yscrollcommand=scroll_book.set)
 
-        # Staff tab
+        # ========== STAFF TAB ==========
         staff_frame = ttk.Frame(notebook)
         notebook.add(staff_frame, text="Staff")
+
         staff_box = tk.Listbox(staff_frame, width=120, height=30, font=FONT)
         staff_box.pack(side='left', fill='both', expand=True, padx=10, pady=10)
+
         scroll_staff = ttk.Scrollbar(staff_frame, orient='vertical', command=staff_box.yview)
         scroll_staff.pack(side='right', fill='y')
         staff_box.config(yscrollcommand=scroll_staff.set)
 
+        # ========== POPULATE DATA ==========
+        # Customers
         for customer in data["customers"]:
             customer_list.insert(tk.END,
-                                 f"ID: {customer[0]}, Name: {customer[1]} {customer[2]}, Email: {customer[3]}, Hashed_Password: {customer[4]}, Salt: {customer[5]}, Date Of Birth: {customer[6]}")
+                                 f"ID: {customer[0]}, Name: {customer[1]} {customer[2]}, "
+                                 f"Email: {customer[3]}, DOB: {customer[6]}"
+                                 )
 
+        # Haircuts
         for haircut in data["haircuts"]:
             haircut_box.insert(tk.END,
-                               f"ID: {haircut[0]}, Name: {haircut[1]}, Price: ${haircut[2]}, Time: {haircut[3]}")
+                               f"ID: {haircut[0]}, Name: {haircut[1]}, "
+                               f"Price: £{haircut[2]:.2f}, Duration: {haircut[3]}"
+                               )
 
-        for booking in data["bookings"]:
-            booking_box.insert(tk.END,
-                               f"BookingID: {booking[0]}, Date: {booking[1]}, Time: {booking[2]}, Customer: {booking[3]}, Haircut: {booking[4]}, Locked: {booking[5]}")
+        # Bookings (load all initially)
+        self.load_all_bookings(booking_box)
 
-        for staff in data["staff"]:
-            staff_box.insert(tk.END, f"StaffID: {staff[0]}, Email: {staff[1]}, Staff: {staff[2]}")
+        # In the populate data section:
+        if "staff" in data:  # Add this check
+            for staff in data["staff"]:
+                staff_box.insert(tk.END,
+                                 f"ID: {staff[0]}, Email: {staff[1]}, Staff Number: {staff[2]}"
+                                 )
 
+
+
+        # ========== CONTROL BUTTONS ==========
         btn_frame = ttk.Frame(window)
         btn_frame.pack(fill='x', pady=10)
 
-        ttk.Button(btn_frame, text="Remove Customer", command=remove_selected_customer).pack(side='left', padx=5)
-        ttk.Button(btn_frame, text="Remove Haircut", command=remove_selected_haircut).pack(side='left', padx=5)
-        ttk.Button(btn_frame, text="Remove Booking", command=remove_selected_booking).pack(side='left', padx=5)
         ttk.Button(btn_frame, text="Close", command=window.destroy).pack(side='right', padx=5)
+
+    def filter_bookings_by_date(self, booking_box, date_filter):
+        """Filter bookings to show only those on a specific date"""
+        try:
+            datetime.strptime(date_filter, "%Y-%m-%d")  # Validate format
+        except ValueError:
+            messagebox.showerror("Error", "Please enter date in YYYY-MM-DD format")
+            return
+
+        all_bookings = self.db.fetch_all_bookings()
+        booking_box.delete(0, tk.END)
+
+        found = False
+        for booking in all_bookings:
+            if booking[1] == date_filter:
+                booking_box.insert(tk.END,
+                                   f"BookingID: {booking[0]}, Date: {booking[1]}, Time: {booking[2]}, "
+                                   f"Customer: {booking[3]}, Haircut: {booking[4]}, Locked: {booking[5]}"
+                                   )
+                found = True
+
+        if not found:
+            booking_box.insert(tk.END, "No bookings found for this date")
+
+    def load_all_bookings(self, booking_box):
+        """Load all bookings without filtering"""
+        booking_box.delete(0, tk.END)
+        for booking in self.db.fetch_all_bookings():
+            booking_box.insert(tk.END,
+                               f"BookingID: {booking[0]}, Date: {booking[1]}, Time: {booking[2]}, "
+                               f"Customer: {booking[3]}, Haircut: {booking[4]}, Locked: {booking[5]}"
+                               )
 
     def register(self):
         def validate_date(date_str):
@@ -503,30 +721,85 @@ class UIManager:
         ttk.Button(window, text="Close", command=window.destroy).pack(pady=10)
 
     def process_booking(self, selected_time, haircut_name, card_number, card_cvc, expiry_date):
+        """Handles the complete booking process with SQLite-compatible syntax"""
         if not self.validate_payment(card_number, card_cvc, expiry_date):
-            return
+            return False
 
         try:
-            self.db.cursor.execute("SELECT HaircutID FROM Haircut WHERE Haircut_Name=?", (haircut_name,))
+            # Start transaction
+            self.db.connection.execute("BEGIN TRANSACTION")
+
+            # Get haircut details
+            self.db.cursor.execute(
+                "SELECT HaircutID, Price, Estimated_Time FROM Haircut WHERE Haircut_Name = ?",
+                (haircut_name,)
+            )
             haircut = self.db.cursor.fetchone()
 
             if not haircut:
                 messagebox.showerror("Error", "Selected haircut not found")
-                return
+                self.db.connection.rollback()
+                return False
 
-            haircut_id = haircut[0]
+            haircut_id, price, duration = haircut
             customer_id = self.get_current_customer_id()
 
             if not customer_id:
                 messagebox.showerror("Error", "No customer logged in")
-                return
+                self.db.connection.rollback()
+                return False
 
+            # Check slot availability (SQLite-compatible version)
             booking_date = datetime.now().strftime("%Y-%m-%d")
-            self.db.insert_booking(booking_date, selected_time, customer_id, haircut_id)
-            messagebox.showinfo("Success", f"Booking confirmed for {selected_time}!")
+            self.db.cursor.execute("""
+                SELECT 1 FROM Booking 
+                WHERE Date = ? AND Time = ? 
+                AND (Locked = 1 OR (ExpiryTime IS NOT NULL AND ExpiryTime > datetime('now')))
+            """, (booking_date, selected_time))
 
+            if self.db.cursor.fetchone():
+                messagebox.showerror("Error", "This time slot is no longer available")
+                self.db.connection.rollback()
+                return False
+
+            # Create temporary booking (15 minute expiry)
+            expiry_time = (datetime.now() + timedelta(minutes=15)).strftime("%Y-%m-%d %H:%M:%S")
+            self.db.cursor.execute("""
+                INSERT INTO Booking (Date, Time, CustomerID, HaircutID, Locked, Duration, ExpiryTime)
+                VALUES (?, ?, ?, ?, 0, ?, ?)
+            """, (booking_date, selected_time, customer_id, haircut_id, duration, expiry_time))
+
+            # Process payment (simulated)
+            payment_success = True  # Replace with actual payment processing
+
+            if payment_success:
+                # Confirm booking
+                self.db.cursor.execute("""
+                    UPDATE Booking 
+                    SET Locked = 1, ExpiryTime = NULL 
+                    WHERE BookingID = last_insert_rowid()
+                """)
+                self.db.connection.commit()
+
+                messagebox.showinfo(
+                    "Success",
+                    f"Booking confirmed for {selected_time}!\n"
+                    f"Service: {haircut_name} ({duration} minutes)\n"
+                    f"Amount: £{price:.2f}"
+                )
+                return True
+            else:
+                self.db.connection.rollback()
+                return False
+
+        except sqlite3.Error as db_error:
+            self.db.connection.rollback()
+            messagebox.showerror("Error", f"Database error: {str(db_error)}")
+            return False
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to create booking: {str(e)}")
+            self.db.connection.rollback()
+            messagebox.showerror("Error", f"Booking failed: {str(e)}")
+            return False
 
     def validate_payment(self, card_number, card_cvc, expiry_date):
         if not (card_number.isdigit() and len(card_number) >= 13):
@@ -557,69 +830,398 @@ class UIManager:
     def create_booking_page(self, selected_time):
         window = self.create_window("Confirm Booking", "500x450")
 
+        # Get haircut options
+        self.db.cursor.execute("SELECT Haircut_Name, Price FROM Haircut")
+        haircuts = self.db.cursor.fetchall()
+
+        if not haircuts:
+            ttk.Label(window, text="No services available").pack(pady=20)
+            ttk.Button(window, text="Close", command=window.destroy).pack(pady=10)
+            return
+
+        # Create form
         main_frame = ttk.Frame(window)
         main_frame.pack(fill='both', expand=True, padx=20, pady=20)
 
-        ttk.Label(main_frame, text=f"Selected Time: {selected_time}",
+        ttk.Label(main_frame,
+                  text=f"Confirm Booking for {selected_time}",
                   style='Header.TLabel').pack(pady=10)
 
-        # Payment Details
+        # Haircut selection
+        haircut_var = tk.StringVar(value=haircuts[0][0])
+        ttk.Label(main_frame, text="Select Service:").pack()
+        haircut_menu = ttk.OptionMenu(main_frame, haircut_var, *[h[0] for h in haircuts])
+        haircut_menu.pack(fill='x', pady=5)
+
+        # Payment details
         payment_frame = ttk.LabelFrame(main_frame, text="Payment Details")
         payment_frame.pack(fill='x', pady=10)
 
-        ttk.Label(payment_frame, text="Card Number:").grid(row=0, column=0, pady=5, sticky='e')
-        card_number = ttk.Entry(payment_frame)
-        card_number.grid(row=0, column=1, pady=5, padx=5, sticky='ew')
+        ttk.Label(payment_frame, text="Card Number:").grid(row=0, column=0, sticky='e')
+        card_entry = ttk.Entry(payment_frame)
+        card_entry.grid(row=0, column=1, pady=5, sticky='ew')
 
-        ttk.Label(payment_frame, text="CVC:").grid(row=1, column=0, pady=5, sticky='e')
-        card_cvc = ttk.Entry(payment_frame)
-        card_cvc.grid(row=1, column=1, pady=5, padx=5, sticky='ew')
+        ttk.Label(payment_frame, text="Expiry (MM/YY):").grid(row=1, column=0, sticky='e')
+        expiry_entry = ttk.Entry(payment_frame)
+        expiry_entry.grid(row=1, column=1, pady=5, sticky='ew')
 
-        ttk.Label(payment_frame, text="Expiry (MM/YY):").grid(row=2, column=0, pady=5, sticky='e')
-        expiry_date = ttk.Entry(payment_frame)
-        expiry_date.grid(row=2, column=1, pady=5, padx=5, sticky='ew')
+        ttk.Label(payment_frame, text="CVC:").grid(row=2, column=0, sticky='e')
+        cvc_entry = ttk.Entry(payment_frame, width=5)
+        cvc_entry.grid(row=2, column=1, pady=5, sticky='w')
 
-        # Haircut Selection
-        haircut_frame = ttk.LabelFrame(main_frame, text="Select Haircut")
-        haircut_frame.pack(fill='x', pady=10)
+        # Confirm button
+        def on_confirm():
+            selected_haircut = haircut_var.get()
+            if self.process_booking(
+                    selected_time,
+                    selected_haircut,
+                    card_entry.get(),
+                    cvc_entry.get(),
+                    expiry_entry.get()
+            ):
+                window.destroy()
 
-        self.db.cursor.execute('''SELECT Haircut_Name FROM Haircut''')
-        haircut_choices = [row[0] for row in self.db.cursor.fetchall()] or ["No services available"]
+        ttk.Button(main_frame, text="Confirm Booking", command=on_confirm).pack(pady=15)
 
-        haircut_var = tk.StringVar(value=haircut_choices[0])
-        haircut_menu = ttk.OptionMenu(haircut_frame, haircut_var, *haircut_choices)
-        haircut_menu.pack(fill='x', padx=5, pady=5)
+    def analytics(self):
+        window = self.create_window("Analytics Dashboard", "1200x800")
+        window.grid_columnconfigure(0, weight=1)
+        window.grid_columnconfigure(1, weight=1)
+        window.grid_rowconfigure(0, weight=1)
+        window.grid_rowconfigure(1, weight=1)
+        window.grid_rowconfigure(2, weight=0)
 
-        # Confirm Button
-        ttk.Button(main_frame, text="Confirm Booking",
-                   command=lambda: [
-                       self.process_booking(
-                           selected_time,
-                           haircut_var.get(),
-                           card_number.get(),
-                           card_cvc.get(),
-                           expiry_date.get()
-                       ),
-                       window.destroy()
-                   ]).pack(pady=15)
+        peak_frame = ttk.LabelFrame(window, text="Peak Booking Hours", padding=10)
+        peak_frame.grid(row=0, column=0, sticky="nsew", padx=10, pady=5)
+        self.peak_canvas = tk.Canvas(peak_frame, bg=BG_COLOR, highlightthickness=0, width=600, height=300)
+        self.peak_canvas.pack(fill="both", expand=True)
 
-    def predictive_analytics(self):
-        window = self.create_window("Predictive Analytics", "800x600")
-        ttk.Label(window, text="Analytics Dashboard", style='Header.TLabel').pack(pady=20)
+        revenue_frame = ttk.LabelFrame(window, text="Revenue Analysis", padding=10)
+        revenue_frame.grid(row=0, column=1, sticky="nsew", padx=10, pady=5)
+        self.revenue_tree = ttk.Treeview(revenue_frame, columns=("Period", "Service", "Revenue", "Bookings"),
+                                         show="headings")
+        for col in ["Period", "Service", "Revenue", "Bookings"]:
+            self.revenue_tree.heading(col, text=col)
+            self.revenue_tree.column(col, width=120)
+        scrollbar = ttk.Scrollbar(revenue_frame, orient="vertical", command=self.revenue_tree.yview)
+        self.revenue_tree.configure(yscrollcommand=scrollbar.set)
+        self.revenue_tree.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
 
-        # Placeholder for analytics content
-        ttk.Label(window, text="Booking trends and predictions will appear here").pack()
+        # 3. Haircut Popularity - Text visualization
+        popularity_frame = ttk.LabelFrame(window, text="Service Popularity", padding=10)
+        popularity_frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=5)
+        self.popularity_text = tk.Text(popularity_frame, bg=BG_COLOR, font=FONT, wrap="word")
+        scrollbar = ttk.Scrollbar(popularity_frame, command=self.popularity_text.yview)
+        self.popularity_text.configure(yscrollcommand=scrollbar.set)
+        self.popularity_text.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
 
-        ttk.Button(window, text="Close", command=window.destroy).pack(pady=20)
+        # 4. Customer Loyalty - Treeview
+        loyalty_frame = ttk.LabelFrame(window, text="Top Customers", padding=10)
+        loyalty_frame.grid(row=1, column=1, sticky="nsew", padx=10, pady=5)
+        self.loyalty_tree = ttk.Treeview(loyalty_frame, columns=("Customer", "Visits", "Styles"), show="headings")
+        for col in ["Customer", "Visits", "Styles"]:
+            self.loyalty_tree.heading(col, text=col)
+            self.loyalty_tree.column(col, width=120)
+        scrollbar = ttk.Scrollbar(loyalty_frame, command=self.loyalty_tree.yview)
+        self.loyalty_tree.configure(yscrollcommand=scrollbar.set)
+        self.loyalty_tree.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        # Controls
+        control_frame = ttk.Frame(window)
+        control_frame.grid(row=2, column=0, columnspan=2, sticky="ew", pady=10)
+
+        ttk.Label(control_frame, text="Days to analyze:").pack(side="left", padx=5)
+        self.days_var = tk.StringVar(value="30")
+        days_combo = ttk.Combobox(control_frame, textvariable=self.days_var,
+                                  values=["7", "14", "30", "60", "90"], width=5)
+        days_combo.pack(side="left", padx=5)
+
+        ttk.Button(control_frame, text="Refresh",
+                   command=lambda: self.refresh_analytics()).pack(side="left", padx=10)
+
+        self.days_var.set("30")
+        self.refresh_analytics()
+
+        # Initial load
+        self.refresh_analytics()
+
+    def refresh_analytics(self):
+        try:
+            days = int(self.days_var.get())
+        except ValueError:
+            days = 30
+            self.days_var.set("30")
+
+        bookings = self.db.fetch_all_bookings()
+        booking_data = []
+
+        for b in bookings:
+            booking_data.append((b[0], f"{b[1]} {b[2]}", b[1]))
+
+        sorted_bookings = self.db.merge_sort(
+            booking_data,
+            sortby='date',
+            ascending=False
+        )
+
+        for item in self.revenue_tree.get_children():
+            self.revenue_tree.delete(item)
+
+        revenue_data = self.db.get_revenue_breakdown(days)
+
+        for row in revenue_data:
+            self.revenue_tree.insert("", "end", values=row)
+
+        self.popularity_text.config(state="normal")
+        self.popularity_text.delete(1.0, "end")
+
+        popularity_data = self.db.get_popular_haircuts(days)
+        total = 1
+
+        if popularity_data:
+            total = sum(item[1] for item in popularity_data)
+
+        for haircut, count in popularity_data:
+            percentage = (count / total) * 100
+            bar_length = int(percentage / 5)
+            bar = "■" * bar_length
+
+            if count == max(item[1] for item in popularity_data):
+                style = "bold"
+            else:
+                style = "normal"
+
+            text_line = f"{haircut.ljust(15)} {bar} {percentage:.1f}% ({count} bookings)\n"
+            self.popularity_text.insert("end", text_line, style)
+
+        self.popularity_text.tag_config("bold", font=(FONT[0], FONT[1], "bold"))
+        self.popularity_text.config(state="disabled")
+
+        for item in self.loyalty_tree.get_children():
+            self.loyalty_tree.delete(item)
+
+        loyalty_data = self.db.get_loyal_customers(3)
+
+        for row in loyalty_data:
+            self.loyalty_tree.insert("", "end", values=row[:3])
+        try:
+            days = int(self.days_var.get())
+        except ValueError:
+            days = 30
+            self.days_var.set("30")
+
+        self.refresh_peak_hours(days)
+
+        for item in self.revenue_tree.get_children():
+            self.revenue_tree.delete(item)
+        revenue_data = self.db.get_revenue_breakdown(days)
+        for row in revenue_data:
+            self.revenue_tree.insert("", "end", values=row)
+
+        self.popularity_text.config(state="normal")
+        self.popularity_text.delete(1.0, "end")
+        popularity_data = self.db.get_popular_haircuts(days)
+        total = sum(item[1] for item in popularity_data) if popularity_data else 1
+
+        for haircut, count in popularity_data:
+            percentage = (count / total) * 100
+            bar = "■" * int(percentage / 5)  # Each ■ represents 5%
+            self.popularity_text.insert("end",
+                                        f"{haircut.ljust(15)} {bar} {percentage:.1f}% ({count} bookings)\n",
+                                        ("bold" if count == max(item[1] for item in popularity_data) else "normal"))
+
+        self.popularity_text.tag_config("bold", font=(FONT[0], FONT[1], "bold"))
+        self.popularity_text.config(state="disabled")
+
+        for item in self.loyalty_tree.get_children():
+            self.loyalty_tree.delete(item)
+        loyalty_data = self.db.get_loyal_customers(3)  # Min 3 visits
+        for row in loyalty_data:
+            self.loyalty_tree.insert("", "end", values=row[:3])  # Only show first 3 columns
+
+    def refresh_peak_hours(self, days):
+        self.peak_canvas.delete("all")
+        peak_data = self.db.get_peak_hours(days)
+
+        if not peak_data:
+            self.peak_canvas.create_text(300, 150, text="No booking data", fill=TEXT_COLOR)
+            return
+
+        # Fixed dimensions
+        canvas_width = 600
+        canvas_height = 300
+
+        max_bookings = max(item[1] for item in peak_data)
+        left_margin = 50
+        right_margin = 30
+        bottom_margin = 40
+        top_margin = 20
+        available_width = canvas_width - left_margin - right_margin
+        available_height = canvas_height - bottom_margin - top_margin
+
+        # Calculate bar dimensions
+        num_bars = len(peak_data)
+        bar_width = min(30, available_width / num_bars - 5)  # Max 30px wide, with 5px gap
+        gap = (available_width - (num_bars * bar_width)) / (num_bars + 1)
+
+        # Draw axes
+        self.peak_canvas.create_line(
+            left_margin, canvas_height - bottom_margin,
+                         canvas_width - right_margin, canvas_height - bottom_margin,
+            width=2
+        )
+        self.peak_canvas.create_line(
+            left_margin, canvas_height - bottom_margin,
+            left_margin, top_margin,
+            width=2
+        )
+
+        # Draw bars with proper spacing
+        for i, (hour, bookings) in enumerate(peak_data):
+            x0 = left_margin + gap + i * (bar_width + gap)
+            y0 = canvas_height - bottom_margin
+            bar_height = (bookings / max_bookings) * available_height if max_bookings > 0 else 0
+            y1 = y0 - bar_height
+
+            # Draw bar with 3D effect
+            self.peak_canvas.create_rectangle(
+                x0, y1, x0 + bar_width, y0,
+                fill=SECONDARY_COLOR, outline=PRIMARY_COLOR, width=1
+            )
+            self.peak_canvas.create_rectangle(
+                x0 + 2, y1 + 2, x0 + bar_width + 2, y0 + 2,
+                fill=SECONDARY_COLOR, outline="", width=0
+            )
+
+            # Draw hour label (rotated 45 degrees)
+            hour_label = self.peak_canvas.create_text(
+                x0 + bar_width / 2, y0 + 10,
+                text=hour, fill=TEXT_COLOR, angle=45, anchor="n"
+            )
+
+            # Draw booking count above bar
+            self.peak_canvas.create_text(
+                x0 + bar_width / 2, y1 - 10,
+                text=str(bookings), fill=PRIMARY_COLOR, font=(FONT[0], FONT[1], "bold")
+            )
+
+        # Y-axis labels
+        for i in range(0, 6):
+            y = canvas_height - bottom_margin - (i * (available_height / 5))
+            value = int(max_bookings * (i / 5))
+            self.peak_canvas.create_text(
+                left_margin - 10, y,
+                text=str(value), fill=TEXT_COLOR, anchor="e"
+            )
+            self.peak_canvas.create_line(
+                left_margin - 5, y,
+                left_margin, y,
+                fill=TEXT_COLOR
+            )
+
+        # Chart title
+        self.peak_canvas.create_text(
+            canvas_width / 2, 15,
+            text=f"Peak Booking Hours (Last {days} Days)",
+            fill=TEXT_COLOR, font=HEADER_FONT
+        )
+
+    def refresh_analytics(self):
+        days = int(self.days_var.get())
+        self.refresh_peak_hours(days)
+        try:
+            days = int(self.days_var.get())
+        except ValueError:
+            days = 30
+
+        self.peak_canvas.delete("all")
+        peak_data = self.db.get_peak_hours(days)
+        if not peak_data:
+            self.peak_canvas.create_text(150, 50, text="No booking data", fill=TEXT_COLOR)
+            return
+
+        max_bookings = max(item[1] for item in peak_data)
+        canvas_width = self.peak_canvas.winfo_width()
+        canvas_height = self.peak_canvas.winfo_height()
+        bar_width = (canvas_width - 40) / len(peak_data)
+        max_bar_height = canvas_height - 80
+
+        for i, (hour, bookings) in enumerate(peak_data):
+            x0 = 30 + i * bar_width
+            y0 = canvas_height - 30
+            bar_height = (bookings / max_bookings) * max_bar_height if max_bookings > 0 else 0
+            y1 = y0 - bar_height
+
+            # Draw bar
+            self.peak_canvas.create_rectangle(
+                x0, y0, x0 + bar_width - 5, y1,
+                fill=SECONDARY_COLOR, outline=PRIMARY_COLOR
+            )
+
+            # Draw hour label
+            self.peak_canvas.create_text(
+                x0 + bar_width / 2 - 2.5, y0 + 15,
+                text=hour, fill=TEXT_COLOR, anchor="n"
+            )
+
+            # Draw booking count
+            self.peak_canvas.create_text(
+                x0 + bar_width / 2 - 2.5, y1 - 10,
+                text=str(bookings), fill="white", anchor="s"
+            )
+
+        # 2. Revenue Table
+        for item in self.revenue_tree.get_children():
+            self.revenue_tree.delete(item)
+        revenue_data = self.db.get_revenue_breakdown(days)
+        for row in revenue_data:
+            self.revenue_tree.insert("", "end", values=row)
+
+        # 3. Haircut Popularity - Text visualization
+        self.popularity_text.config(state="normal")
+        self.popularity_text.delete(1.0, "end")
+        popularity_data = self.db.get_popular_haircuts(days)
+        total = sum(item[1] for item in popularity_data) if popularity_data else 1
+
+        for haircut, count in popularity_data:
+            percentage = (count / total) * 100
+            bar = "■" * int(percentage / 5)  # Each ■ represents 5%
+            self.popularity_text.insert("end",
+                                        f"{haircut.ljust(15)} {bar} {percentage:.1f}% ({count} bookings)\n",
+                                        ("bold" if count == max(item[1] for item in popularity_data) else "normal"))
+
+        self.popularity_text.tag_config("bold", font=(FONT[0], FONT[1], "bold"))
+        self.popularity_text.config(state="disabled")
+
+        # 4. Customer Loyalty
+        for item in self.loyalty_tree.get_children():
+            self.loyalty_tree.delete(item)
+        loyalty_data = self.db.get_loyal_customers(3)  # Min 3 visits
+        for row in loyalty_data:
+            self.loyalty_tree.insert("", "end", values=row[:3])  # Only show first 3 columns
 
     def bookings(self):
         def on_date_select():
             selected_year = year_spinbox.get()
-            selected_date = f"{selected_year}-{int(month_spinbox.get()):02d}-{int(day_spinbox.get()):02d}"
-            available_slots = self.db.get_available_slots(selected_date)
-            time_listbox.delete(0, tk.END)
-            for time in available_slots:
-                time_listbox.insert(tk.END, time)
+            selected_month = month_spinbox.get().zfill(2)
+            selected_day = day_spinbox.get().zfill(2)
+            selected_date = f"{selected_year}-{selected_month}-{selected_day}"
+
+            try:
+                datetime.strptime(selected_date, "%Y-%m-%d")  # Validate date
+                available_slots = self.db.get_available_slots(selected_date)
+
+                time_listbox.delete(0, tk.END)
+                if available_slots:
+                    for time in available_slots:
+                        time_listbox.insert(tk.END, time)
+                else:
+                    time_listbox.insert(tk.END, "No available slots")
+            except ValueError:
+                messagebox.showerror("Error", "Invalid date selected")
 
         def select_time():
             selected = time_listbox.curselection()
@@ -688,6 +1290,16 @@ class BarberApp:
         self.db = DatabaseManager()
         self.auth = AuthManager(self.db)
         self.ui = UIManager(self, self.db)
+        self.db.remove_expired_bookings()
+
+    def schedule_cleanup(self):
+        def cleanup():
+            expired = self.db.remove_expired_bookings()
+            if expired:
+                print(f"Cleaned up {expired} expired bookings")
+            self.root.after(300000, cleanup)  
+            
+        self.root.after(300000, cleanup)
 
     def main_menu(self):
         self.ui.main_menu()
@@ -720,7 +1332,7 @@ class BarberApp:
                    command=self.ui.show_database).grid(row=1, column=0, padx=10, pady=10)
 
         ttk.Button(btn_frame, text="Analytics", width=20,
-                   command=self.ui.predictive_analytics).grid(row=1, column=1, padx=10, pady=10)
+                   command=self.ui.analytics).grid(row=1, column=1, padx=10, pady=10)
 
         ttk.Button(window, text="Logout",
                    command=lambda: [window.destroy(), self.main_menu()]).pack(side='bottom', pady=20)
@@ -734,7 +1346,7 @@ class BookingManager:
         self.cursor = db_connection.cursor()
 
     def lock_time_slot(self, date, time):
-        lock_duration = 10 * 60  # 10 minutes in seconds
+        lock_duration = 10 * 60
         current_time = time.time()
         lock_end_time = current_time + lock_duration
 
@@ -746,25 +1358,25 @@ class BookingManager:
         self.db.connection.commit()
 
     def get_available_slots(self, date):
-        booked_slots = self.cursor.execute("SELECT Time, Locked, LockEndTime FROM Booking WHERE Date = ?",
-                                           (date,)).fetchall()
-        booked_times = []
-        current_time = time.time()
+        """Get truly available time slots (not locked or booked)"""
+        try:
+            # Get ALL bookings for the date (both locked and confirmed)
+            self.cursor.execute("""
+                SELECT Time FROM Booking 
+                WHERE Date = ?
+            """, (date,))
+            booked_slots = [time[0] for time in self.cursor.fetchall()]
 
-        for booked_time, locked, lock_end_time in booked_slots:
-            if locked:
-                if current_time > lock_end_time:
-                    self.cursor.execute('''UPDATE Booking SET Locked = 0 WHERE Date = ? AND Time = ?''',
-                                        (date, booked_time))
-                    self.db.connection.commit()
-                else:
-                    booked_times.append(booked_time)
-            else:
-                booked_times.append(booked_time)
+            # Generate all possible time slots
+            all_slots = [f"{hour:02d}:00" for hour in range(9, 18)]  # 9AM-5PM
 
-        times = [f"{hour:02d}:00" for hour in range(9, 18)]
-        unbooked_slots = [time for time in times if time not in booked_times]
-        return unbooked_slots
+            # Return only slots that aren't booked
+            return [slot for slot in all_slots if slot not in booked_slots]
+
+        except sqlite3.Error as e:
+            print(f"Database error: {e}")
+            return []
+
 
     def book_slot(self, date, time, customer_id, haircut_id):
         available_slots = self.get_available_slots(date)
