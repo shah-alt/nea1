@@ -50,7 +50,7 @@ def generate_fake_data(db_connection, num_customers=20, num_bookings=50):
 
     # Generate all possible time slots
     all_slots = []
-    for date in [random_date("2023-01-01", "2023-12-31").strftime("%Y-%m-%d")
+    for date in [random_date("2025-03-01", "2025-04-02").strftime("%Y-%m-%d")
                  for _ in range(num_bookings // 10 + 1)]:  # Spread across multiple dates
         for hour in range(9, 18):  # 9AM to 5PM
             for minute in ['00']:
@@ -84,4 +84,4 @@ def random_date(start, end):
     random_days = random.randint(0, delta.days)
     return start_date + timedelta(days=random_days)
 
-generate_fake_data(db, num_customers=30, num_bookings=100)  # Will create up to 100 valid bookings
+generate_fake_data(db, num_customers=30, num_bookings=30)  # Will create up to 100 valid bookings
