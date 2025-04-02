@@ -29,24 +29,33 @@ class AuthManager:
     def valid_password(self, password):
         return password in self.password
 
-    def hash_password(self, password, salt="", rounds=5):
-        salt_password = password + salt
-        hash_value = 0
-        for _ in range(rounds):
-            for char in salt_password:
-                hash_value = (hash_value << 5) ^ (hash_value + ord(char))
-                hash_value &= 0xFFFFFFFF
-        return hex(hash_value)[2:].zfill(8)
+    def hash_password(self, password, salt="", rounds=10):
+        new_password = password + salt
+        hashed_value = 0
+        for i in range(rounds):
+            for characters in new_password:
+                hashed_value = 1 + (hashed_value << 5) * (hashed_value + ord(characters))
+                hashed_value &= 0xFFFFFFFF
+        return format(hashed_value, '08x') # returns in hex
 
     def generate_salt(self, length=8):
         characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'
-        return ''.join(random.choice(characters) for _ in range(length))
+        salt = ""
+        for i in range(length):
+            character = random.choice(characters)
+            salt = salt + character
+        return salt
 
     def login_check(self, email, password):
         customer = self.db.fetch_customer_email(email)
         if customer:
-            hashed_password = self.hash_password(password, salt=customer[5])
-            return hashed_password == customer[4]
+            hash = customer[4]
+            salt = customer[5]
+            hashed_password = self.hash_password(password, salt)
+            print(f"Stored hash: {hash} (type: {type(hash)})")
+            print(f"Computed hash: {hashed_password} (type: {type(hashed_password)})")
+            print(f"Salt used: {salt}")
+            return hashed_password == hash
         return False
 
     def staff_check(self, Staff_Number):
@@ -99,29 +108,6 @@ class DatabaseManager:
             StaffID INTEGER PRIMARY KEY AUTOINCREMENT, 
             Email TEXT,
             Staff_Number TEXT)''')
-
-        self.cursor.execute('''CREATE TABLE IF NOT EXISTS Reservations (
-        ReservationID INTEGER PRIMARY KEY,
-        BookingID INTEGER,
-        Expiring TEXT,
-        FOREIGN KEY (BookingID) REFERENCES Booking(BookingID) ON DELETE CASCADE)''')
-
-        self.cursor.execute('''
-            CREATE TABLE IF NOT EXISTS BookingExpiry (
-                BookingID INTEGER PRIMARY KEY,
-                ExpiryTime TEXT,
-                FOREIGN KEY (BookingID) REFERENCES Booking(BookingID)
-            )
-        ''')
-
-        self.cursor.execute('''
-            CREATE TABLE IF NOT EXISTS PaymentStatus (
-                BookingID INTEGER PRIMARY KEY,
-                Paid BOOLEAN DEFAULT 0,
-                FOREIGN KEY (BookingID) REFERENCES Booking(BookingID)
-            )
-        ''')
-
         self.insert_admin()
 
     def insert_admin(self):
@@ -153,13 +139,13 @@ class DatabaseManager:
         self.cursor.execute(f'''
             SELECT 
                 strftime('%Y-%m', Date) AS Period,
-                h.Haircut_Name,
-                SUM(h.Price) AS Revenue,
+                Haircut.Haircut_Name,
+                SUM(Haircut.Price) AS Revenue,
                 COUNT(*) AS Bookings
-            FROM Booking b
-            JOIN Haircut h ON b.HaircutID = h.HaircutID
+            FROM Booking
+            JOIN Haircut ON Booking.HaircutID = Haircut.HaircutID
             WHERE Date >= date('now', '-' || ? || ' DAYS')
-            GROUP BY Period, h.HaircutID
+            GROUP BY Period, Haircut.HaircutID
             ORDER BY Period DESC, Revenue DESC
         ''', (period,))
         return self.cursor.fetchall()
@@ -167,12 +153,12 @@ class DatabaseManager:
     def get_popular_haircuts(self, days):
         self.cursor.execute('''
             SELECT 
-                h.Haircut_Name,
+                Haircut.Haircut_Name,
                 COUNT(*) AS Bookings
-            FROM Booking b
-            JOIN Haircut h ON b.HaircutID = h.HaircutID
-            WHERE b.Date >= date('now', '-' || ? || ' DAYS')
-            GROUP BY h.HaircutID
+            FROM Booking
+            JOIN Haircut ON Booking.HaircutID = HaircutID
+            WHERE Booking.Date >= date('now', '-' || ? || ' DAYS')
+            GROUP BY Haircut.HaircutID
             ORDER BY Bookings DESC
         ''', (days,))
         return self.cursor.fetchall()
@@ -180,14 +166,14 @@ class DatabaseManager:
     def get_loyal_customers(self, min_visits):
         self.cursor.execute('''
             SELECT 
-                c.FirstName || ' ' || c.Surname AS Customer,
+                Customer.FirstName || ' ' || Customer.Surname AS Customer,
                 COUNT(*) AS Visits,
-                GROUP_CONCAT(DISTINCT h.Haircut_Name) AS Styles,
-                MAX(b.Date) AS LastVisit
-            FROM Booking b
-            JOIN Customer c ON b.CustomerID = c.CustomerID
-            JOIN Haircut h ON b.HaircutID = h.HaircutID
-            GROUP BY b.CustomerID
+                GROUP_CONCAT(DISTINCT Haircut.Haircut_Name) AS Styles,
+                MAX(Booking.Date) AS LastVisit
+            FROM Booking
+            JOIN Customer ON Booking.CustomerID = Customer.CustomerID
+            JOIN Haircut ON Booking.HaircutID = Haircut.HaircutID
+            GROUP BY Booking.CustomerID
             HAVING Visits >= ?
             ORDER BY Visits DESC
         ''', (min_visits,))
@@ -210,7 +196,7 @@ class DatabaseManager:
 
             available = self.get_available_slots(date)
             if not available or time not in available:
-                raise ValueError(f"Slot not available. Available slots: {', '.join(available)}")
+                messagebox.showerror("Time slot is already booked or unavailable")
 
             self.cursor.execute("""
                 INSERT INTO Booking (Date, Time, CustomerID, HaircutID, Locked, Duration) 
@@ -220,9 +206,9 @@ class DatabaseManager:
             self.connection.commit()
             return True
 
-        except Exception as e:
+        except:
             self.connection.rollback()
-            print(f"Booking error: {e}")
+            messagebox.showerror("Error while trying to insert booking.")
             return False
 
     def fetch_customer_email(self, email):
@@ -241,17 +227,13 @@ class DatabaseManager:
         return self.cursor.fetchall()
 
     def fetch_all_bookings(self):
-        self.connection.commit()
         self.cursor.execute("SELECT * FROM Booking")
         return self.cursor.fetchall()
 
     def fetch_all_staff(self):
-        try:
-            self.cursor.execute("SELECT * FROM Staff")
-            return self.cursor.fetchall() or []
-        except sqlite3.Error as e:
-            print(f"Database error: {e}")
-            return []
+        self.cursor.execute("SELECT * FROM Staff")
+        return self.cursor.fetchall()
+
 
     def fetch_all_data(self):
         customers = self.fetch_all_customers()
@@ -282,8 +264,8 @@ class DatabaseManager:
             return available_slots
 
 
-        except sqlite3.Error as e:
-            print(f"Database error: {e}")
+        except:
+            messagebox.showerror("There was an error finding available slots")
             return []
 
     def remove_customer(self, CustomerID):
@@ -307,9 +289,9 @@ class DatabaseManager:
             ''')
             self.connection.commit()
             return self.cursor.rowcount
-        except Exception as e:
+        except:
             self.connection.rollback()
-            print(f"Cleanup error: {e}")
+            messagebox.showerror("Error while removing expired bookings")
             return 0
 
     def merge_sort(self, records, sortby='id', ascending=True):
@@ -327,9 +309,6 @@ class DatabaseManager:
         leftlist = self.merge_sort(records[:mid], sortby, ascending)
         rightlist = self.merge_sort(records[mid:], sortby, ascending)
 
-        return self.merge_lists(leftlist, rightlist, sort_index, ascending, sortby)
-
-    def merge_lists(self, leftlist, rightlist, sort_index, ascending, sortby):
         sorted_list = []
         left_pointer = 0
         right_pointer = 0
@@ -379,13 +358,13 @@ class UIManager:
         self.setup_styles()
 
     def setup_styles(self):
-        style = ttk.Style()
-        style.theme_use('clam')
-        style.configure('.', background=BG_COLOR, font=FONT)
-        style.configure('TButton', background=SECONDARY_COLOR, foreground='white')
-        style.map('TButton', background=[('active', PRIMARY_COLOR)])
-        style.configure('Header.TLabel', font=HEADER_FONT)
-        style.configure('TEntry', **ENTRY_STYLE)
+        self.style = ttk.Style()
+        self.style.theme_use('clam')
+        self.style.configure('.', background=BG_COLOR, font=FONT)
+        self.style.configure('TButton', background=SECONDARY_COLOR, foreground='white')
+        self.style.map('TButton', background=[('active', PRIMARY_COLOR)])
+        self.style.configure('Header.TLabel', font=HEADER_FONT)
+        self.style.configure('TEntry', **ENTRY_STYLE)
 
     def create_window(self, title, size="400x400"):
         window = tk.Toplevel()
@@ -540,7 +519,7 @@ class UIManager:
         try:
             datetime.strptime(date_filter, "%Y-%m-%d")
         except ValueError:
-            messagebox.showerror("Error", "Please enter date in YYYY-MM-DD format")
+            messagebox.showerror("error", "Please enter in YYYY-MM-DD")
             return
 
         all_bookings = self.db.fetch_all_bookings()
@@ -592,7 +571,8 @@ class UIManager:
                 return
 
             salt = self.app.auth.generate_salt()
-            hashed_password = self.auth.hash_password(new_password, salt=salt)
+            hashed_password = self.auth.hash_password(new_password, salt)
+            print(f"New hash: {hashed_password}")  # Should be 8 chars
             self.app.db.insert_customer(surname_entry.get(), firstname_entry.get(), new_email,
                                         hashed_password, salt, date_of_birth)
 
@@ -764,13 +744,10 @@ class UIManager:
                 self.db.connection.rollback()
                 return False
 
-        except sqlite3.Error as db_error:
+        except:
             self.db.connection.rollback()
-            messagebox.showerror("Error", f"Database error: {str(db_error)}")
-            return False
-        except Exception as e:
-            self.db.connection.rollback()
-            messagebox.showerror("Error", f"Booking failed: {str(e)}")
+            messagebox.showerror("error",
+                                 "something went wrong while booking, please try again and check credentials")
             return False
 
     def validate_payment(self, card_number, card_cvc, expiry_date):
@@ -1267,33 +1244,8 @@ class BarberApp:
         self.ui.register()
 
     def main_page(self):
-        window = tk.Toplevel()
-        window.title("Barber Booking System")
-        window.geometry("800x600")
-        window.configure(bg=BG_COLOR)
-
-        header = ttk.Label(window, text="Main Menu", style='Header.TLabel')
-        header.pack(pady=30)
-
-        btn_frame = ttk.Frame(window)
-        btn_frame.pack(pady=30)
-
-        ttk.Button(btn_frame, text="Book Appointment", width=20,
-                   command=lambda: [window.destroy(), self.ui.bookings()]).grid(row=0, column=0, padx=10, pady=10)
-
-        ttk.Button(btn_frame, text="View Pricing", width=20,
-                   command=self.ui.pricing).grid(row=0, column=1, padx=10, pady=10)
-
-        ttk.Button(btn_frame, text="View Database", width=20,
-                   command=self.ui.show_database).grid(row=1, column=0, padx=10, pady=10)
-
-        ttk.Button(btn_frame, text="Analytics", width=20,
-                   command=self.ui.analytics).grid(row=1, column=1, padx=10, pady=10)
-
-        ttk.Button(window, text="Logout",
-                   command=lambda: [window.destroy(), self.main_menu()]).pack(side='bottom', pady=20)
-
-        window.mainloop()
+        self.main_page_window = MainPageWindow(self, self.ui)
+        self.main_page_window.show()
 
 
 class BookingManager:
@@ -1313,25 +1265,9 @@ class BookingManager:
         ''', (lock_end_time, date, time))
         self.db.connection.commit()
 
-    def get_available_slots(self, date):
-        try:
-            self.cursor.execute("""
-                SELECT Time FROM Booking 
-                WHERE Date = ?
-            """, (date,))
-            booked_slots = [time[0] for time in self.cursor.fetchall()]
-
-            all_slots = [f"{hour:02d}:00" for hour in range(9, 18)]
-
-            return [slot for slot in all_slots if slot not in booked_slots]
-
-        except sqlite3.Error as e:
-            print(f"Database error: {e}")
-            return []
-
 
     def book_slot(self, date, time, customer_id, haircut_id):
-        available_slots = self.get_available_slots(date)
+        available_slots = self.db.get_available_slots(date)
         if time not in available_slots:
             raise Exception(f"The time slot {time} is not available.")
 
@@ -1343,7 +1279,426 @@ class BookingManager:
         return f"Booking successful for {time} on {date}."
 
 
+class BaseWindow:
+    def __init__(self):
+        self.window = tk.Toplevel()
+        self.window.configure(bg=BG_COLOR)
+
+    def show(self):
+        self.window.deiconify()
+        self.window.mainloop()
+
+    def close(self):
+        self.window.destroy()
+
+class MainMenuWindow(BaseWindow):
+    def __init__(self, app):
+        super().__init__()
+        self.app = app
+        self.window.title("Barber Booking System")
+        self.window.geometry("600x400")
+        self.setup_ui()
+
+    def setup_ui(self):
+        header = ttk.Label(self.window, text="Welcome to Barber Pro", style='Header.TLabel')
+        header.pack(pady=40)
+
+        btn_frame = ttk.Frame(self.window)
+        btn_frame.pack(pady=20)
+
+        ttk.Button(btn_frame, text="Login", width=15,
+                   command=lambda: [self.close(), self.app.login()]).pack(pady=10)
+        ttk.Button(btn_frame, text="Register", width=15,
+                   command=lambda: [self.close(), self.app.register()]).pack(pady=10)
+
+class MainPageWindow(BaseWindow):
+    def __init__(self, app, ui):
+        super().__init__()
+        self.app = app
+        self.ui = ui
+        self.window.title("Barber Booking System")
+        self.window.geometry("800x600")
+        self.setup_ui()
+
+    def setup_ui(self):
+        header = ttk.Label(self.window, text="Main Menu", style='Header.TLabel')
+        header.pack(pady=30)
+
+        btn_frame = ttk.Frame(self.window)
+        btn_frame.pack(pady=30)
+
+        ttk.Button(btn_frame, text="Book Appointment", width=20,
+                   command=lambda: [self.close(), self.ui.bookings()]).grid(row=0, column=0, padx=10, pady=10)
+
+        ttk.Button(btn_frame, text="View Pricing", width=20,
+                   command=self.ui.pricing).grid(row=0, column=1, padx=10, pady=10)
+
+        ttk.Button(btn_frame, text="View Database", width=20,
+                   command=self.ui.show_database).grid(row=1, column=0, padx=10, pady=10)
+
+        ttk.Button(btn_frame, text="Analytics", width=20,
+                   command=self.ui.analytics).grid(row=1, column=1, padx=10, pady=10)
+
+        ttk.Button(self.window, text="Logout",
+                   command=lambda: [self.close(), self.app.main_menu()]).pack(side='bottom', pady=20)
+
+class LoginWindow(BaseWindow):
+    def __init__(self, app, auth):
+        super().__init__()
+        self.app = app
+        self.auth = auth
+        self.window.title("Login")
+        self.setup_login_ui()
+
+    def setup_login_ui(self):
+        frame = ttk.Frame(self.window)
+        frame.pack(pady=20)
+
+        email_label = ttk.Label(frame, text="Email:")
+        email_label.grid(row=0, column=0)
+        self.email_entry = ttk.Entry(frame)
+        self.email_entry.grid(row=0, column=1)
+
+        password_label = ttk.Label(frame, text="Password:")
+        password_label.grid(row=1, column=0)
+        self.password_entry = ttk.Entry(frame, show="*")
+        self.password_entry.grid(row=1, column=1)
+
+        ttk.Button(frame, text="Login", command=self.attempt_login).grid(row=2, column=0)
+        ttk.Button(frame, text="Back", command=self.back).grid(row=2, column=1)
+
+    def attempt_login(self):
+        email = self.email_entry.get()
+        password = self.password_entry.get()
+
+        if self.auth.login_check(email, password):
+            messagebox.showinfo("Success", "Login successful!")
+            self.close()
+            self.app.main_page()
+        else:
+            messagebox.showerror("Error", "Invalid email or password.")
+
+    def back(self):
+        self.close()
+        self.app.main_menu()
+
+class RegisterWindow(BaseWindow):
+    def __init__(self, app, auth, db):
+        super().__init__()
+        self.app = app
+        self.auth = auth
+        self.db = db
+        self.window.title("Register")
+        self.window.geometry("450x350")
+        self.setup_ui()
+
+    def setup_ui(self):
+        form_frame = ttk.Frame(self.window)
+        form_frame.pack(pady=20, padx=20, fill='both', expand=True)
+
+        labels = ["Email:", "Password:", "Surname:", "First Name:", "Date of Birth:"]
+        self.entries = []
+
+        for i, text in enumerate(labels):
+            ttk.Label(form_frame, text=text).grid(row=i, column=0, pady=5, sticky='e')
+            entry = ttk.Entry(form_frame)
+            entry.grid(row=i, column=1, pady=5, padx=5, sticky='ew')
+            self.entries.append(entry)
+
+        self.entries[-1].insert(0, "DD/MM/YYYY")
+
+        btn_frame = ttk.Frame(form_frame)
+        btn_frame.grid(row=5, columnspan=2, pady=15)
+
+        ttk.Button(btn_frame, text="Create Account", command=self.create_account).pack(side='left', padx=5)
+        ttk.Button(btn_frame, text="Back", command=self.back).pack(side='left', padx=5)
+
+    def validate_date(self, date_str):
+        try:
+            if len(date_str) != 10:
+                return False
+            day, month, year = map(int, date_str.split('/'))
+            return 1 <= day <= 31 and 1 <= month <= 12 and 1900 <= year <= 2025
+        except:
+            return False
+
+    def create_account(self):
+        email, password, surname, firstname, dob = [e.get() for e in self.entries]
+
+        if not email or not password:
+            messagebox.showerror("Error", "Email and Password must be entered.")
+            return
+
+        if not self.validate_date(dob):
+            messagebox.showerror("Error", "Date must be in format DD/MM/YYYY")
+            return
+
+        salt = self.auth.generate_salt()
+        hashed_password = self.auth.hash_password(password, salt=salt)
+        self.db.insert_customer(surname, firstname, email, hashed_password, salt, dob)
+
+        self.auth.email.append(email)
+        self.auth.password.append(hashed_password)
+        self.close()
+        self.app.main_menu()
+
+    def back(self):
+        self.close()
+        self.app.main_menu()
+
+class BookingWindow(BaseWindow):
+    def __init__(self, app, ui, db):
+        super().__init__()
+        self.app = app
+        self.ui = ui
+        self.db = db
+        self.window.title("Book an Appointment")
+        self.window.geometry("600x500")
+        self.setup_ui()
+
+    def setup_ui(self):
+        main_frame = ttk.Frame(self.window)
+        main_frame.pack(fill='both', expand=True, padx=20, pady=20)
+
+        ttk.Label(main_frame, text="Select Appointment Date", style='Header.TLabel').pack(pady=10)
+
+        date_frame = ttk.Frame(main_frame)
+        date_frame.pack(pady=10)
+
+        ttk.Label(date_frame, text="Year:").grid(row=0, column=0, padx=5)
+        self.year_spinbox = ttk.Spinbox(date_frame, from_=2023, to=2025, width=5)
+        self.year_spinbox.grid(row=0, column=1, padx=5)
+        self.year_spinbox.set(datetime.now().year)
+
+        ttk.Label(date_frame, text="Month:").grid(row=0, column=2, padx=5)
+        self.month_spinbox = ttk.Spinbox(date_frame, from_=1, to=12, width=3)
+        self.month_spinbox.grid(row=0, column=3, padx=5)
+        self.month_spinbox.set(datetime.now().month)
+
+        ttk.Label(date_frame, text="Day:").grid(row=0, column=4, padx=5)
+        self.day_spinbox = ttk.Spinbox(date_frame, from_=1, to=31, width=3)
+        self.day_spinbox.grid(row=0, column=5, padx=5)
+        self.day_spinbox.set(datetime.now().day)
+
+        ttk.Button(main_frame, text="Check Availability",
+                   command=self.on_date_select).pack(pady=10)
+
+        ttk.Label(main_frame, text="Available Times:").pack()
+
+        time_frame = ttk.Frame(main_frame)
+        time_frame.pack(fill='x', pady=10)
+
+        self.time_listbox = tk.Listbox(time_frame, height=8, font=FONT)
+        self.time_listbox.pack(side='left', fill='both', expand=True)
+
+        scrollbar = ttk.Scrollbar(time_frame, orient='vertical', command=self.time_listbox.yview)
+        scrollbar.pack(side='right', fill='y')
+        self.time_listbox.config(yscrollcommand=scrollbar.set)
+
+        btn_frame = ttk.Frame(main_frame)
+        btn_frame.pack(pady=10)
+
+        ttk.Button(btn_frame, text="Select", command=self.on_select).pack(side='left', padx=5)
+        ttk.Button(btn_frame, text="Back", command=self.back).pack(side='left', padx=5)
+
+    def on_date_select(self):
+        selected_date = f"{self.year_spinbox.get()}-{self.month_spinbox.get().zfill(2)}-{self.day_spinbox.get().zfill(2)}"
+        available_slots = self.db.get_available_slots(selected_date)
+
+        self.time_listbox.delete(0, tk.END)
+        for slot in available_slots:
+            self.time_listbox.insert(tk.END, slot)
+
+    def on_select(self):
+        selected = self.time_listbox.curselection()
+        if not selected:
+            messagebox.showerror("Error", "Please select a time slot")
+            return
+        time_selected = self.time_listbox.get(selected[0])
+        self.close()
+        self.ui.create_booking_page(time_selected)
+
+    def back(self):
+        self.close()
+        self.app.main_page()
+
+class PricingWindow(BaseWindow):
+    def __init__(self, db):
+        super().__init__()
+        self.db = db
+        self.window.title("Pricing")
+        self.window.geometry("600x400")
+        self.setup_ui()
+
+    def setup_ui(self):
+        self.db.cursor.execute("SELECT * FROM Haircut")
+        haircuts = self.db.cursor.fetchall()
+
+        tree = ttk.Treeview(self.window, columns=("Name", "Price", "Duration"), show="headings")
+        tree.heading("Name", text="Haircut Name")
+        tree.heading("Price", text="Price (£)")
+        tree.heading("Duration", text="Duration")
+
+        for haircut in haircuts:
+            tree.insert("", tk.END, values=(haircut[1], f"£{haircut[2]:.2f}", haircut[3]))
+
+        tree.pack(fill='both', expand=True, padx=10, pady=10)
+        ttk.Button(self.window, text="Close", command=self.close).pack(pady=10)
+
+class DatabaseWindow(BaseWindow):
+    def __init__(self, db):
+        super().__init__()
+        self.db = db
+        self.window.title("Database Contents")
+        self.window.geometry("1200x800")
+        self.setup_ui()
+
+    def setup_ui(self):
+        data = self.db.fetch_all_data()
+        notebook = ttk.Notebook(self.window)
+        notebook.pack(fill='both', expand=True)
+
+        cust_frame = ttk.Frame(notebook)
+        notebook.add(cust_frame, text="Customers")
+
+        customer_list = tk.Listbox(cust_frame, width=120, height=30, font=FONT)
+        customer_list.pack(side='left', fill='both', expand=True, padx=10, pady=10)
+
+        scroll_cust = ttk.Scrollbar(cust_frame, orient='vertical', command=customer_list.yview)
+        scroll_cust.pack(side='right', fill='y')
+        customer_list.config(yscrollcommand=scroll_cust.set)
+
+        haircut_frame = ttk.Frame(notebook)
+        notebook.add(haircut_frame, text="Haircuts")
+
+        haircut_box = tk.Listbox(haircut_frame, width=120, height=30, font=FONT)
+        haircut_box.pack(side='left', fill='both', expand=True, padx=10, pady=10)
+
+        scroll_hair = ttk.Scrollbar(haircut_frame, orient='vertical', command=haircut_box.yview)
+        scroll_hair.pack(side='right', fill='y')
+        haircut_box.config(yscrollcommand=scroll_hair.set)
+
+        booking_frame = ttk.Frame(notebook)
+        notebook.add(booking_frame, text="Bookings")
+
+        booking_box = tk.Listbox(booking_frame, width=120, height=30, font=FONT)
+        booking_box.pack(side='left', fill='both', expand=True, padx=10, pady=10)
+
+        scroll_book = ttk.Scrollbar(booking_frame, orient='vertical', command=booking_box.yview)
+        scroll_book.pack(side='right', fill='y')
+        booking_box.config(yscrollcommand=scroll_book.set)
+
+        staff_frame = ttk.Frame(notebook)
+        notebook.add(staff_frame, text="Staff")
+
+        staff_box = tk.Listbox(staff_frame, width=120, height=30, font=FONT)
+        staff_box.pack(side='left', fill='both', expand=True, padx=10, pady=10)
+
+        scroll_staff = ttk.Scrollbar(staff_frame, orient='vertical', command=staff_box.yview)
+        scroll_staff.pack(side='right', fill='y')
+        staff_box.config(yscrollcommand=scroll_staff.set)
+
+        for customer in data["customers"]:
+            customer_list.insert(tk.END,
+                                 f"ID: {customer[0]}, Name: {customer[1]} {customer[2]}, "
+                                 f"Email: {customer[3]}, DOB: {customer[6]}"
+                                 )
+
+        for haircut in data["haircuts"]:
+            haircut_box.insert(tk.END,
+                               f"ID: {haircut[0]}, Name: {haircut[1]}, "
+                               f"Price: £{haircut[2]:.2f}, Duration: {haircut[3]}"
+                               )
+
+        for booking in data["bookings"]:
+            booking_box.insert(tk.END,
+                               f"BookingID: {booking[0]}, Date: {booking[1]}, Time: {booking[2]}, "
+                               f"Customer: {booking[3]}, Haircut: {booking[4]}, Locked: {booking[5]}"
+                               )
+
+        if "staff" in data:
+            for staff in data["staff"]:
+                staff_box.insert(tk.END,
+                                 f"ID: {staff[0]}, Email: {staff[1]}, Staff Number: {staff[2]}"
+                                 )
+
+        btn_frame = ttk.Frame(self.window)
+        btn_frame.pack(fill='x', pady=10)
+
+        ttk.Button(btn_frame, text="Close", command=self.close).pack(side='right', padx=5)
+
+
+class AnalyticsWindow(BaseWindow):
+    def __init__(self, ui):
+        super().__init__()
+        self.ui = ui
+        self.window.title("Analytics Dashboard")
+        self.window.geometry("1200x800")
+        self.setup_ui()
+
+    def setup_ui(self):
+        self.window.grid_columnconfigure(0, weight=1)
+        self.window.grid_columnconfigure(1, weight=1)
+        self.window.grid_rowconfigure(0, weight=1)
+        self.window.grid_rowconfigure(1, weight=1)
+        self.window.grid_rowconfigure(2, weight=0)
+
+        peak_frame = ttk.LabelFrame(self.window, text="Peak Booking Hours", padding=10)
+        peak_frame.grid(row=0, column=0, sticky="nsew", padx=10, pady=5)
+        self.peak_canvas = tk.Canvas(peak_frame, bg=BG_COLOR, highlightthickness=0, width=600, height=300)
+        self.peak_canvas.pack(fill="both", expand=True)
+
+        revenue_frame = ttk.LabelFrame(self.window, text="Revenue Analysis", padding=10)
+        revenue_frame.grid(row=0, column=1, sticky="nsew", padx=10, pady=5)
+        self.revenue_tree = ttk.Treeview(revenue_frame, columns=("Period", "Service", "Revenue", "Bookings"),
+                                         show="headings")
+        for col in ["Period", "Service", "Revenue", "Bookings"]:
+            self.revenue_tree.heading(col, text=col)
+            self.revenue_tree.column(col, width=120)
+        scrollbar = ttk.Scrollbar(revenue_frame, orient="vertical", command=self.revenue_tree.yview)
+        self.revenue_tree.configure(yscrollcommand=scrollbar.set)
+        self.revenue_tree.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        popularity_frame = ttk.LabelFrame(self.window, text="Service Popularity", padding=10)
+        popularity_frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=5)
+        self.popularity_text = tk.Text(popularity_frame, bg=BG_COLOR, font=FONT, wrap="word")
+        scrollbar = ttk.Scrollbar(popularity_frame, command=self.popularity_text.yview)
+        self.popularity_text.configure(yscrollcommand=scrollbar.set)
+        self.popularity_text.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        loyalty_frame = ttk.LabelFrame(self.window, text="Top Customers", padding=10)
+        loyalty_frame.grid(row=1, column=1, sticky="nsew", padx=10, pady=5)
+        self.loyalty_tree = ttk.Treeview(loyalty_frame, columns=("Customer", "Visits", "Styles"), show="headings")
+        for col in ["Customer", "Visits", "Styles"]:
+            self.loyalty_tree.heading(col, text=col)
+            self.loyalty_tree.column(col, width=120)
+        scrollbar = ttk.Scrollbar(loyalty_frame, command=self.loyalty_tree.yview)
+        self.loyalty_tree.configure(yscrollcommand=scrollbar.set)
+        self.loyalty_tree.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        control_frame = ttk.Frame(self.window)
+        control_frame.grid(row=2, column=0, columnspan=2, sticky="ew", pady=10)
+
+        ttk.Label(control_frame, text="Days to analyze:").pack(side="left", padx=5)
+        self.days_var = tk.StringVar(value="30")
+        days_combo = ttk.Combobox(control_frame, textvariable=self.days_var,
+                                  values=["7", "14", "30", "60", "90"], width=5)
+        days_combo.pack(side="left", padx=5)
+
+        ttk.Button(control_frame, text="Refresh",
+                   command=lambda: self.ui.refresh_analytics()).pack(side="left", padx=10)
+
+        self.ui.days_var.set("30")
+        self.ui.refresh_analytics()
+
+    def refresh_analytics(self):
+        self.ui.refresh_analytics()
+
+
+
 if __name__ == "__main__":
     app = BarberApp()
     app.main_menu()
-
