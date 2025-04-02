@@ -153,7 +153,7 @@ class DatabaseManager:
                 Haircut.Haircut_Name,
                 COUNT(*) AS Bookings
             FROM Booking
-            JOIN Haircut ON Booking.HaircutID = HaircutID
+            JOIN Haircut ON Booking.HaircutID = Haircut.HaircutID
             WHERE Booking.Date >= date('now', '-' || ? || ' DAYS')
             GROUP BY Haircut.HaircutID
             ORDER BY Bookings DESC
@@ -1265,7 +1265,7 @@ class BookingManager:
     def book_slot(self, date, time, customer_id, haircut_id):
         available_slots = self.db.get_available_slots(date)
         if time not in available_slots:
-            raise Exception(f"The time slot {time} is not available.")
+            raise Exception("Time slot not available")
 
         self.cursor.execute('''
             INSERT INTO Booking (Date, Time, CustomerID, HaircutID, Locked) 
