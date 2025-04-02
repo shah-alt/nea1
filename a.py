@@ -31,10 +31,10 @@ class AuthManager:
 
     def hash_password(self, password, salt="", rounds=10):
         new_password = password + salt
-        hashed_value = 0
+        hashed_value = 2166136261
         for i in range(rounds):
             for characters in new_password:
-                hashed_value = 1 + (hashed_value << 5) * (hashed_value + ord(characters))
+                hashed_value = ((hashed_value << 5) + hashed_value) ^ ord(characters)
                 hashed_value &= 0xFFFFFFFF
         return format(hashed_value, '08x') # returns in hex
 
@@ -52,9 +52,6 @@ class AuthManager:
             hash = customer[4]
             salt = customer[5]
             hashed_password = self.hash_password(password, salt)
-            print(f"Stored hash: {hash} (type: {type(hash)})")
-            print(f"Computed hash: {hashed_password} (type: {type(hashed_password)})")
-            print(f"Salt used: {salt}")
             return hashed_password == hash
         return False
 
@@ -572,7 +569,6 @@ class UIManager:
 
             salt = self.app.auth.generate_salt()
             hashed_password = self.auth.hash_password(new_password, salt)
-            print(f"New hash: {hashed_password}")  # Should be 8 chars
             self.app.db.insert_customer(surname_entry.get(), firstname_entry.get(), new_email,
                                         hashed_password, salt, date_of_birth)
 
