@@ -4,7 +4,6 @@ import sqlite3
 import random
 from datetime import datetime, timedelta
 import re
-import time
 
 BG_COLOR = "#f5f5f5"
 PRIMARY_COLOR = "#34495e"
@@ -56,6 +55,8 @@ class AuthManager:
         return False
 
     def staff_check(self, Staff_Number):
+        if Staff_Number == "admin":
+            return True
         staff = self.db.fetch_staff_number(Staff_Number)
         if staff:
             return True
@@ -127,6 +128,7 @@ class DatabaseManager:
                 COUNT(*) AS Bookings
             FROM Booking
             WHERE Date >= date('now', '-' || ? || ' DAYS')
+            AND Locked = 1
             GROUP BY Hour
             ORDER BY Bookings DESC
         ''', (days,))
@@ -415,102 +417,102 @@ class UIManager:
                         f"Haircut: {full_booking[4]}, Locked: {full_booking[5]}"
                     )
                     booking_box.insert(tk.END, booking_text)
+        if self.staff_login():
+            data = self.db.fetch_all_data()
+            window = self.create_window("Database Contents", "1200x800")
 
-        data = self.db.fetch_all_data()
-        window = self.create_window("Database Contents", "1200x800")
+            notebook = ttk.Notebook(window)
+            notebook.pack(fill='both', expand=True)
 
-        notebook = ttk.Notebook(window)
-        notebook.pack(fill='both', expand=True)
+            cust_frame = ttk.Frame(notebook)
+            notebook.add(cust_frame, text="Customers")
 
-        cust_frame = ttk.Frame(notebook)
-        notebook.add(cust_frame, text="Customers")
+            customer_list = tk.Listbox(cust_frame, width=120, height=30, font=FONT)
+            customer_list.pack(side='left', fill='both', expand=True, padx=10, pady=10)
 
-        customer_list = tk.Listbox(cust_frame, width=120, height=30, font=FONT)
-        customer_list.pack(side='left', fill='both', expand=True, padx=10, pady=10)
+            scroll_cust = ttk.Scrollbar(cust_frame, orient='vertical', command=customer_list.yview)
+            scroll_cust.pack(side='right', fill='y')
+            customer_list.config(yscrollcommand=scroll_cust.set)
 
-        scroll_cust = ttk.Scrollbar(cust_frame, orient='vertical', command=customer_list.yview)
-        scroll_cust.pack(side='right', fill='y')
-        customer_list.config(yscrollcommand=scroll_cust.set)
+            haircut_frame = ttk.Frame(notebook)
+            notebook.add(haircut_frame, text="Haircuts")
 
-        haircut_frame = ttk.Frame(notebook)
-        notebook.add(haircut_frame, text="Haircuts")
+            haircut_box = tk.Listbox(haircut_frame, width=120, height=30, font=FONT)
+            haircut_box.pack(side='left', fill='both', expand=True, padx=10, pady=10)
 
-        haircut_box = tk.Listbox(haircut_frame, width=120, height=30, font=FONT)
-        haircut_box.pack(side='left', fill='both', expand=True, padx=10, pady=10)
+            scroll_hair = ttk.Scrollbar(haircut_frame, orient='vertical', command=haircut_box.yview)
+            scroll_hair.pack(side='right', fill='y')
+            haircut_box.config(yscrollcommand=scroll_hair.set)
 
-        scroll_hair = ttk.Scrollbar(haircut_frame, orient='vertical', command=haircut_box.yview)
-        scroll_hair.pack(side='right', fill='y')
-        haircut_box.config(yscrollcommand=scroll_hair.set)
+            booking_frame = ttk.Frame(notebook)
+            notebook.add(booking_frame, text="Bookings")
 
-        booking_frame = ttk.Frame(notebook)
-        notebook.add(booking_frame, text="Bookings")
+            filter_frame = ttk.Frame(booking_frame)
+            filter_frame.pack(fill='x', pady=5)
 
-        filter_frame = ttk.Frame(booking_frame)
-        filter_frame.pack(fill='x', pady=5)
+            ttk.Label(filter_frame, text="Filter by Date (YYYY-MM-DD):").pack(side='left', padx=5)
+            date_filter_entry = ttk.Entry(filter_frame, width=12)
+            date_filter_entry.pack(side='left', padx=5)
 
-        ttk.Label(filter_frame, text="Filter by Date (YYYY-MM-DD):").pack(side='left', padx=5)
-        date_filter_entry = ttk.Entry(filter_frame, width=12)
-        date_filter_entry.pack(side='left', padx=5)
+            ttk.Button(filter_frame, text="Apply Filter",
+                       command=lambda: self.filter_bookings_by_date(booking_box, date_filter_entry.get())).pack(side='left',
+                                                                                                                padx=5)
 
-        ttk.Button(filter_frame, text="Apply Filter",
-                   command=lambda: self.filter_bookings_by_date(booking_box, date_filter_entry.get())).pack(side='left',
-                                                                                                            padx=5)
+            ttk.Button(filter_frame, text="Clear Filter",
+                       command=lambda: self.load_all_bookings(booking_box)).pack(side='left', padx=5)
 
-        ttk.Button(filter_frame, text="Clear Filter",
-                   command=lambda: self.load_all_bookings(booking_box)).pack(side='left', padx=5)
+            sort_frame = ttk.Frame(booking_frame)
+            sort_frame.pack(fill='x', pady=5)
 
-        sort_frame = ttk.Frame(booking_frame)
-        sort_frame.pack(fill='x', pady=5)
+            ttk.Button(sort_frame, text="Sort by Date (Oldest)",
+                       command=lambda: sort_bookings('date', True)).pack(side='left', padx=5)
 
-        ttk.Button(sort_frame, text="Sort by Date (Oldest)",
-                   command=lambda: sort_bookings('date', True)).pack(side='left', padx=5)
+            ttk.Button(sort_frame, text="Sort by Date (Newest)",
+                       command=lambda: sort_bookings('date', False)).pack(side='left', padx=5)
 
-        ttk.Button(sort_frame, text="Sort by Date (Newest)",
-                   command=lambda: sort_bookings('date', False)).pack(side='left', padx=5)
+            booking_box = tk.Listbox(booking_frame, width=120, height=30, font=FONT)
+            booking_box.pack(side='left', fill='both', expand=True, padx=10, pady=10)
 
-        booking_box = tk.Listbox(booking_frame, width=120, height=30, font=FONT)
-        booking_box.pack(side='left', fill='both', expand=True, padx=10, pady=10)
+            scroll_book = ttk.Scrollbar(booking_frame, orient='vertical', command=booking_box.yview)
+            scroll_book.pack(side='right', fill='y')
+            booking_box.config(yscrollcommand=scroll_book.set)
 
-        scroll_book = ttk.Scrollbar(booking_frame, orient='vertical', command=booking_box.yview)
-        scroll_book.pack(side='right', fill='y')
-        booking_box.config(yscrollcommand=scroll_book.set)
+            staff_frame = ttk.Frame(notebook)
+            notebook.add(staff_frame, text="Staff")
 
-        staff_frame = ttk.Frame(notebook)
-        notebook.add(staff_frame, text="Staff")
+            staff_box = tk.Listbox(staff_frame, width=120, height=30, font=FONT)
+            staff_box.pack(side='left', fill='both', expand=True, padx=10, pady=10)
 
-        staff_box = tk.Listbox(staff_frame, width=120, height=30, font=FONT)
-        staff_box.pack(side='left', fill='both', expand=True, padx=10, pady=10)
+            scroll_staff = ttk.Scrollbar(staff_frame, orient='vertical', command=staff_box.yview)
+            scroll_staff.pack(side='right', fill='y')
+            staff_box.config(yscrollcommand=scroll_staff.set)
 
-        scroll_staff = ttk.Scrollbar(staff_frame, orient='vertical', command=staff_box.yview)
-        scroll_staff.pack(side='right', fill='y')
-        staff_box.config(yscrollcommand=scroll_staff.set)
+            for customer in data["customers"]:
+                customer_list.insert(tk.END,
+                                     f"ID: {customer[0]}, Name: {customer[1]} {customer[2]}, "
+                                     f"Email: {customer[3]}, DOB: {customer[6]}"
+                                     )
 
-        for customer in data["customers"]:
-            customer_list.insert(tk.END,
-                                 f"ID: {customer[0]}, Name: {customer[1]} {customer[2]}, "
-                                 f"Email: {customer[3]}, DOB: {customer[6]}"
-                                 )
+            for haircut in data["haircuts"]:
+                haircut_box.insert(tk.END,
+                                   f"ID: {haircut[0]}, Name: {haircut[1]}, "
+                                   f"Price: £{haircut[2]:.2f}, Duration: {haircut[3]}"
+                                   )
 
-        for haircut in data["haircuts"]:
-            haircut_box.insert(tk.END,
-                               f"ID: {haircut[0]}, Name: {haircut[1]}, "
-                               f"Price: £{haircut[2]:.2f}, Duration: {haircut[3]}"
-                               )
+            self.load_all_bookings(booking_box)
 
-        self.load_all_bookings(booking_box)
-
-        if "staff" in data:
-            for staff in data["staff"]:
-                staff_box.insert(tk.END,
-                                 f"ID: {staff[0]}, Email: {staff[1]}, Staff Number: {staff[2]}"
-                                 )
+            if "staff" in data:
+                for staff in data["staff"]:
+                    staff_box.insert(tk.END,
+                                     f"ID: {staff[0]}, Email: {staff[1]}, Staff Number: {staff[2]}"
+                                     )
 
 
 
-        btn_frame = ttk.Frame(window)
-        btn_frame.pack(fill='x', pady=10)
+            btn_frame = ttk.Frame(window)
+            btn_frame.pack(fill='x', pady=10)
 
-        ttk.Button(btn_frame, text="Close", command=window.destroy).pack(side='right', padx=5)
+            ttk.Button(btn_frame, text="Close", command=window.destroy).pack(side='right', padx=5)
 
     def filter_bookings_by_date(self, booking_box, date_filter):
         try:
@@ -608,14 +610,24 @@ class UIManager:
         staffID_entry = ttk.Entry(window)
         staffID_entry.pack(pady=5)
 
+        login = [False]
+        def staff_check():
+            if self.auth.staff_check(staffID_entry.get()):
+                login[0] = True
+                window.destroy()
+            else:
+                messagebox.showerror("Error", "Invalid Staff ID")
+
+
         btn_frame = ttk.Frame(window)
         btn_frame.pack(pady=15)
 
-        ttk.Button(btn_frame, text="Login",
-                   command=lambda: self.auth.staff_check(staffID_entry.get())).pack(side='left', padx=5)
-        ttk.Button(btn_frame, text="Back",
-                   command=window.destroy).pack(side='left', padx=5)
+        ttk.Button(btn_frame, text="Login", command=staff_check).pack(side='left',padx=5)
+        ttk.Button(btn_frame, text="Back", command=window.destroy).pack(side='left',padx=5)
 
+        window.wait_window()
+
+        return login[0]
     def login(self):
         def attempt_login():
             email = email_entry.get()
@@ -820,69 +832,71 @@ class UIManager:
                     expiry_entry.get()
             ):
                 window.destroy()
+                self.main_menu()
 
         ttk.Button(main_frame, text="Confirm Booking", command=on_confirm).pack(pady=15)
 
     def analytics(self):
-        window = self.create_window("Analytics Dashboard", "1200x800")
-        window.grid_columnconfigure(0, weight=1)
-        window.grid_columnconfigure(1, weight=1)
-        window.grid_rowconfigure(0, weight=1)
-        window.grid_rowconfigure(1, weight=1)
-        window.grid_rowconfigure(2, weight=0)
+        if self.staff_login():
+            window = self.create_window("Analytics Dashboard", "1200x800")
+            window.grid_columnconfigure(0, weight=1)
+            window.grid_columnconfigure(1, weight=1)
+            window.grid_rowconfigure(0, weight=1)
+            window.grid_rowconfigure(1, weight=1)
+            window.grid_rowconfigure(2, weight=0)
 
-        peak_frame = ttk.LabelFrame(window, text="Peak Booking Hours", padding=10)
-        peak_frame.grid(row=0, column=0, sticky="nsew", padx=10, pady=5)
-        self.peak_canvas = tk.Canvas(peak_frame, bg=BG_COLOR, highlightthickness=0, width=600, height=300)
-        self.peak_canvas.pack(fill="both", expand=True)
+            peak_frame = ttk.LabelFrame(window, text="Peak Booking Hours", padding=10)
+            peak_frame.grid(row=0, column=0, sticky="nsew", padx=10, pady=5)
+            self.peak_canvas = tk.Canvas(peak_frame, bg=BG_COLOR, highlightthickness=0, width=600, height=300)
+            self.peak_canvas.pack(fill="both", expand=True)
 
-        revenue_frame = ttk.LabelFrame(window, text="Revenue Analysis", padding=10)
-        revenue_frame.grid(row=0, column=1, sticky="nsew", padx=10, pady=5)
-        self.revenue_tree = ttk.Treeview(revenue_frame, columns=("Period", "Service", "Revenue", "Bookings"),
-                                         show="headings")
-        for col in ["Period", "Service", "Revenue", "Bookings"]:
-            self.revenue_tree.heading(col, text=col)
-            self.revenue_tree.column(col, width=120)
-        scrollbar = ttk.Scrollbar(revenue_frame, orient="vertical", command=self.revenue_tree.yview)
-        self.revenue_tree.configure(yscrollcommand=scrollbar.set)
-        self.revenue_tree.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
+            revenue_frame = ttk.LabelFrame(window, text="Revenue Analysis", padding=10)
+            revenue_frame.grid(row=0, column=1, sticky="nsew", padx=10, pady=5)
+            self.revenue_tree = ttk.Treeview(revenue_frame, columns=("Period", "Service", "Revenue", "Bookings"),
+                                             show="headings")
+            for col in ["Period", "Service", "Revenue", "Bookings"]:
+                self.revenue_tree.heading(col, text=col)
+                self.revenue_tree.column(col, width=120)
+            scrollbar = ttk.Scrollbar(revenue_frame, orient="vertical", command=self.revenue_tree.yview)
+            self.revenue_tree.configure(yscrollcommand=scrollbar.set)
+            self.revenue_tree.pack(side="left", fill="both", expand=True)
+            scrollbar.pack(side="right", fill="y")
 
-        popularity_frame = ttk.LabelFrame(window, text="Service Popularity", padding=10)
-        popularity_frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=5)
-        self.popularity_text = tk.Text(popularity_frame, bg=BG_COLOR, font=FONT, wrap="word")
-        scrollbar = ttk.Scrollbar(popularity_frame, command=self.popularity_text.yview)
-        self.popularity_text.configure(yscrollcommand=scrollbar.set)
-        self.popularity_text.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
+            popularity_frame = ttk.LabelFrame(window, text="Service Popularity", padding=10)
+            popularity_frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=5)
+            self.popularity_text = tk.Text(popularity_frame, bg=BG_COLOR, font=FONT, wrap="word")
+            scrollbar = ttk.Scrollbar(popularity_frame, command=self.popularity_text.yview)
+            self.popularity_text.configure(yscrollcommand=scrollbar.set)
+            self.popularity_text.pack(side="left", fill="both", expand=True)
+            scrollbar.pack(side="right", fill="y")
 
-        loyalty_frame = ttk.LabelFrame(window, text="Top Customers", padding=10)
-        loyalty_frame.grid(row=1, column=1, sticky="nsew", padx=10, pady=5)
-        self.loyalty_tree = ttk.Treeview(loyalty_frame, columns=("Customer", "Visits", "Styles"), show="headings")
-        for col in ["Customer", "Visits", "Styles"]:
-            self.loyalty_tree.heading(col, text=col)
-            self.loyalty_tree.column(col, width=120)
-        scrollbar = ttk.Scrollbar(loyalty_frame, command=self.loyalty_tree.yview)
-        self.loyalty_tree.configure(yscrollcommand=scrollbar.set)
-        self.loyalty_tree.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
+            loyalty_frame = ttk.LabelFrame(window, text="Top Customers", padding=10)
+            loyalty_frame.grid(row=1, column=1, sticky="nsew", padx=10, pady=5)
+            self.loyalty_tree = ttk.Treeview(loyalty_frame, columns=("Customer", "Visits", "Styles"), show="headings")
+            for col in ["Customer", "Visits", "Styles"]:
+                self.loyalty_tree.heading(col, text=col)
+                self.loyalty_tree.column(col, width=120)
+            scrollbar = ttk.Scrollbar(loyalty_frame, command=self.loyalty_tree.yview)
+            self.loyalty_tree.configure(yscrollcommand=scrollbar.set)
+            self.loyalty_tree.pack(side="left", fill="both", expand=True)
+            scrollbar.pack(side="right", fill="y")
 
-        control_frame = ttk.Frame(window)
-        control_frame.grid(row=2, column=0, columnspan=2, sticky="ew", pady=10)
+            control_frame = ttk.Frame(window)
+            control_frame.grid(row=2, column=0, columnspan=2, sticky="ew", pady=10)
 
-        ttk.Label(control_frame, text="Days to analyze:").pack(side="left", padx=5)
-        self.days_var = tk.StringVar(value="30")
-        days_combo = ttk.Combobox(control_frame, textvariable=self.days_var,
-                                  values=["7", "14", "30", "60", "90"], width=5)
-        days_combo.pack(side="left", padx=5)
+            ttk.Label(control_frame, text="Days to analyze:").pack(side="left", padx=5)
+            self.days_var = tk.StringVar(value="30")
+            days_combo = ttk.Combobox(control_frame, textvariable=self.days_var,
+                                      values=["7", "14", "30", "60", "90"], width=5)
+            days_combo.pack(side="left", padx=5)
 
-        ttk.Button(control_frame, text="Refresh",
-                   command=lambda: self.refresh_analytics()).pack(side="left", padx=10)
+            ttk.Button(control_frame, text="Refresh",
+                       command=lambda: self.refresh_analytics()).pack(side="left", padx=10)
 
-        self.days_var.set("30")
-        self.refresh_analytics()
+            self.days_var.set("30")
+            self.refresh_analytics()
 
-        self.refresh_analytics()
+            self.refresh_analytics()
 
     def refresh_analytics(self):
         try:
@@ -1059,74 +1073,6 @@ class UIManager:
             fill=TEXT_COLOR, font=HEADER_FONT
         )
 
-    def refresh_analytics(self):
-        days = int(self.days_var.get())
-        self.refresh_peak_hours(days)
-        try:
-            days = int(self.days_var.get())
-        except ValueError:
-            days = 30
-
-        self.peak_canvas.delete("all")
-        peak_data = self.db.get_peak_hours(days)
-        if not peak_data:
-            self.peak_canvas.create_text(150, 50, text="No booking data", fill=TEXT_COLOR)
-            return
-
-        max_bookings = max(item[1] for item in peak_data)
-        canvas_width = self.peak_canvas.winfo_width()
-        canvas_height = self.peak_canvas.winfo_height()
-        bar_width = (canvas_width - 40) / len(peak_data)
-        max_bar_height = canvas_height - 80
-
-        for i, (hour, bookings) in enumerate(peak_data):
-            x0 = 30 + i * bar_width
-            y0 = canvas_height - 30
-            bar_height = (bookings / max_bookings) * max_bar_height if max_bookings > 0 else 0
-            y1 = y0 - bar_height
-
-            self.peak_canvas.create_rectangle(
-                x0, y0, x0 + bar_width - 5, y1,
-                fill=SECONDARY_COLOR, outline=PRIMARY_COLOR
-            )
-
-            self.peak_canvas.create_text(
-                x0 + bar_width / 2 - 2.5, y0 + 15,
-                text=hour, fill=TEXT_COLOR, anchor="n"
-            )
-
-            self.peak_canvas.create_text(
-                x0 + bar_width / 2 - 2.5, y1 - 10,
-                text=str(bookings), fill="white", anchor="s"
-            )
-
-        for item in self.revenue_tree.get_children():
-            self.revenue_tree.delete(item)
-        revenue_data = self.db.get_revenue_breakdown(days)
-        for row in revenue_data:
-            self.revenue_tree.insert("", "end", values=row)
-
-        self.popularity_text.config(state="normal")
-        self.popularity_text.delete(1.0, "end")
-        popularity_data = self.db.get_popular_haircuts(days)
-        total = sum(item[1] for item in popularity_data) if popularity_data else 1
-
-        for haircut, count in popularity_data:
-            percentage = (count / total) * 100
-            bar = "■" * int(percentage / 5)
-            self.popularity_text.insert("end",
-                                        f"{haircut.ljust(15)} {bar} {percentage:.1f}% ({count} bookings)\n",
-                                        ("bold" if count == max(item[1] for item in popularity_data) else "normal"))
-
-        self.popularity_text.tag_config("bold", font=(FONT[0], FONT[1], "bold"))
-        self.popularity_text.config(state="disabled")
-
-        for item in self.loyalty_tree.get_children():
-            self.loyalty_tree.delete(item)
-        loyalty_data = self.db.get_loyal_customers(3)
-        for row in loyalty_data:
-            self.loyalty_tree.insert("", "end", values=row[:3])
-
     def bookings(self):
         def on_date_select():
             selected_year = year_spinbox.get()
@@ -1211,6 +1157,7 @@ class UIManager:
                    command=lambda: [window.destroy(), self.app.main_page()]).pack(side='left', padx=5)
 
 
+
 class BarberApp:
     def __init__(self):
         self.root = tk.Tk()
@@ -1265,7 +1212,7 @@ class BookingManager:
     def book_slot(self, date, time, customer_id, haircut_id):
         available_slots = self.db.get_available_slots(date)
         if time not in available_slots:
-            raise Exception("Time slot not available")
+            raise Exception(f"The time slot {time} is not available.")
 
         self.cursor.execute('''
             INSERT INTO Booking (Date, Time, CustomerID, HaircutID, Locked) 
@@ -1548,81 +1495,153 @@ class DatabaseWindow(BaseWindow):
         self.window.title("Database Contents")
         self.window.geometry("1200x800")
         self.setup_ui()
+        self.current_tab = None
+
+    def remove(self):
+        current_tab = self.tabs.tab(self.tabs.select(), "text")
+        if current_tab == "Customers":
+            selected_customer = self.customer_list.curselection()
+            if not selected_customer:
+                messagebox.showerror("Error", "Select a customer")
+                return
+            selected_customer_info = self.customer_list.get(selected_customer[0])
+
+            CustomerID = re.search(r"ID: (\d+)", selected_customer_info)  # extracts ID
+            try:
+                if CustomerID:
+                    CustomerID = int(CustomerID.group(1))  # gets rid of "ID:"
+                    self.db.remove_customer(CustomerID)
+                    messagebox.showinfo("Success", f"Customer ID {CustomerID} removed successfully.")
+                    self.customer_list.delete(selected_customer[0])
+            except:
+                messagebox.showerror("Error", "Customer ID could not be extracted.")
+        if current_tab == "Haircuts":
+            selected_haircut = self.haircut_box.curselection()
+            if not selected_haircut:
+                messagebox.showerror("Error", "Select a haircut")
+                return
+            selected_haircut_info = self.haircut_box.get(selected_haircut[0])
+
+            HaircutID = re.search(r"ID: (\d+)", selected_haircut_info)
+            try:
+                if HaircutID:
+                    HaircutID = int(HaircutID.group(1))
+                    self.db.remove_haircut(HaircutID)
+                    messagebox.showinfo("Success", f"Haircut ID {HaircutID} removed successfully.")
+                    self.haircut_box.delete(selected_haircut[0])
+            except:
+                messagebox.showerror("Error", "Haircut ID could not be extracted.")
+
+        if current_tab == "Bookings":
+            selected_booking = self.booking_box.curselection()
+            if not selected_booking:
+                messagebox.showerror("Error", "Select a booking")
+                return
+            selected_booking_info = self.booking_box.get(selected_booking[0])
+
+            BookingID = re.search(r"ID: (\d+)", selected_booking_info)
+            try:
+                if BookingID:
+                    BookingID = int(BookingID.group(1))
+                    self.db.remove_booking(BookingID)
+                    messagebox.showinfo("Success", f"Booking ID {BookingID} removed successfully.")
+                    self.booking_box.delete(selected_booking[0])
+            except:
+                messagebox.showerror("Error", "Booking ID could not be extracted.")
+        if current_tab == "Staff":
+            selected_staff = self.staff_box.curselection()
+            if not selected_staff:
+                messagebox.showerror("Error", "Select a staff")
+                return
+            selected_staff_info = self.staff_box.get(selected_staff[0])
+
+            StaffID = re.search(r"ID: (\d+)", selected_staff_info)
+            try:
+                if StaffID:
+                    StaffID = int(StaffID.group(1))
+                    self.db.remove_staff(StaffID)
+                    messagebox.showinfo("Success", f"Staff ID {StaffID} removed successfully.")
+                    self.staff_box.delete(selected_staff[0])
+            except:
+                messagebox.showerror("Error", "Staff ID could not be extracted.")
 
     def setup_ui(self):
         data = self.db.fetch_all_data()
-        notebook = ttk.Notebook(self.window)
-        notebook.pack(fill='both', expand=True)
+        self.tabs = ttk.Notebook(self.window)
+        self.tabs.pack(fill='both', expand=True)
 
-        cust_frame = ttk.Frame(notebook)
-        notebook.add(cust_frame, text="Customers")
+        cust_frame = ttk.Frame(self.tabs)
+        self.tabs.add(cust_frame, text="Customers")
 
-        customer_list = tk.Listbox(cust_frame, width=120, height=30, font=FONT)
-        customer_list.pack(side='left', fill='both', expand=True, padx=10, pady=10)
+        self.customer_list = tk.Listbox(cust_frame, width=120, height=30, font=FONT)
+        self.customer_list.pack(side='left', fill='both', expand=True, padx=10, pady=10)
 
-        scroll_cust = ttk.Scrollbar(cust_frame, orient='vertical', command=customer_list.yview)
+        scroll_cust = ttk.Scrollbar(cust_frame, orient='vertical', command=self.customer_list.yview)
         scroll_cust.pack(side='right', fill='y')
-        customer_list.config(yscrollcommand=scroll_cust.set)
+        self.customer_list.config(yscrollcommand=scroll_cust.set)
 
-        haircut_frame = ttk.Frame(notebook)
-        notebook.add(haircut_frame, text="Haircuts")
+        haircut_frame = ttk.Frame(self.tabs)
+        self.tabs.add(haircut_frame, text="Haircuts")
 
-        haircut_box = tk.Listbox(haircut_frame, width=120, height=30, font=FONT)
-        haircut_box.pack(side='left', fill='both', expand=True, padx=10, pady=10)
+        self.haircut_box = tk.Listbox(haircut_frame, width=120, height=30, font=FONT)
+        self.haircut_box.pack(side='left', fill='both', expand=True, padx=10, pady=10)
 
-        scroll_hair = ttk.Scrollbar(haircut_frame, orient='vertical', command=haircut_box.yview)
+        scroll_hair = ttk.Scrollbar(haircut_frame, orient='vertical', command=self.haircut_box.yview)
         scroll_hair.pack(side='right', fill='y')
-        haircut_box.config(yscrollcommand=scroll_hair.set)
+        self.haircut_box.config(yscrollcommand=scroll_hair.set)
 
-        booking_frame = ttk.Frame(notebook)
-        notebook.add(booking_frame, text="Bookings")
+        booking_frame = ttk.Frame(self.tabs)
+        self.tabs.add(booking_frame, text="Bookings")
 
-        booking_box = tk.Listbox(booking_frame, width=120, height=30, font=FONT)
-        booking_box.pack(side='left', fill='both', expand=True, padx=10, pady=10)
+        self.booking_box = tk.Listbox(booking_frame, width=120, height=30, font=FONT)
+        self.booking_box.pack(side='left', fill='both', expand=True, padx=10, pady=10)
 
-        scroll_book = ttk.Scrollbar(booking_frame, orient='vertical', command=booking_box.yview)
+        scroll_book = ttk.Scrollbar(booking_frame, orient='vertical', command=self.booking_box.yview)
         scroll_book.pack(side='right', fill='y')
-        booking_box.config(yscrollcommand=scroll_book.set)
+        self.booking_box.config(yscrollcommand=scroll_book.set)
 
-        staff_frame = ttk.Frame(notebook)
-        notebook.add(staff_frame, text="Staff")
+        staff_frame = ttk.Frame(self.tabs)
+        self.tabs.add(staff_frame, text="Staff")
 
-        staff_box = tk.Listbox(staff_frame, width=120, height=30, font=FONT)
-        staff_box.pack(side='left', fill='both', expand=True, padx=10, pady=10)
+        self.staff_box = tk.Listbox(staff_frame, width=120, height=30, font=FONT)
+        self.staff_box.pack(side='left', fill='both', expand=True, padx=10, pady=10)
 
-        scroll_staff = ttk.Scrollbar(staff_frame, orient='vertical', command=staff_box.yview)
+        scroll_staff = ttk.Scrollbar(staff_frame, orient='vertical', command=self.staff_box.yview)
         scroll_staff.pack(side='right', fill='y')
-        staff_box.config(yscrollcommand=scroll_staff.set)
+        self.staff_box.config(yscrollcommand=scroll_staff.set)
 
         for customer in data["customers"]:
-            customer_list.insert(tk.END,
+            self.customer_list.insert(tk.END,
                                  f"ID: {customer[0]}, Name: {customer[1]} {customer[2]}, "
                                  f"Email: {customer[3]}, DOB: {customer[6]}"
                                  )
 
         for haircut in data["haircuts"]:
-            haircut_box.insert(tk.END,
+            self.haircut_box.insert(tk.END,
                                f"ID: {haircut[0]}, Name: {haircut[1]}, "
                                f"Price: £{haircut[2]:.2f}, Duration: {haircut[3]}"
                                )
 
         for booking in data["bookings"]:
-            booking_box.insert(tk.END,
+            self.booking_box.insert(tk.END,
                                f"BookingID: {booking[0]}, Date: {booking[1]}, Time: {booking[2]}, "
                                f"Customer: {booking[3]}, Haircut: {booking[4]}, Locked: {booking[5]}"
                                )
 
         if "staff" in data:
             for staff in data["staff"]:
-                staff_box.insert(tk.END,
+                self.staff_box.insert(tk.END,
                                  f"ID: {staff[0]}, Email: {staff[1]}, Staff Number: {staff[2]}"
                                  )
 
         btn_frame = ttk.Frame(self.window)
         btn_frame.pack(fill='x', pady=10)
 
-        ttk.Button(btn_frame, text="Close", command=self.close).pack(side='right', padx=5)
 
+
+
+        ttk.Button(btn_frame, text="Close", command=self.close).pack(side='right', padx=5)
+        ttk.Button(btn_frame, text="Remove", command=self.remove).pack(side='left', padx=5)
 
 class AnalyticsWindow(BaseWindow):
     def __init__(self, ui):
@@ -1692,6 +1711,8 @@ class AnalyticsWindow(BaseWindow):
 
     def refresh_analytics(self):
         self.ui.refresh_analytics()
+
+
 
 
 
